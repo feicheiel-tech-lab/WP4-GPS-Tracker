@@ -63,6 +63,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -73,6 +77,8 @@ import feicheiel.technologies.trackme.ui.theme.PROJECT_Red
 import feicheiel.technologies.trackme.ui.theme.PROJECT_Yellow
 import feicheiel.technologies.trackme.ui.theme.TrackMeTheme
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.LaunchedEffect
+import com.google.android.gms.location.LocationServices
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
@@ -156,12 +162,13 @@ class MainActivity : ComponentActivity() {
         Configuration.getInstance().osmdroidTileCache = File(basePath, "tiles")
         
         // Copy offline map from assets if it exists
-        copyOfflineMapFromAssets("map.sqlite")
+        copyOfflineMapFromAssets("bono_ahafo.mbtiles")
 
         setContent {
             TrackMeTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    OSMMapScreen(modifier = Modifier.padding(innerPadding))
+                    // Anchor to the absolute bottom by only applying top padding from the scaffold
+                    OSMMapScreen(modifier = Modifier.padding(top = innerPadding.calculateTopPadding()))
                 }
             }
         }
@@ -229,6 +236,9 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     val database = remember { AppDatabase.getDatabase(context) }
     
+    // Attempt to get last known location for initial center
+    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    
     val prefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
     val userId = prefs.getString("current_user_id", "default_user") ?: "default_user"
 
@@ -265,6 +275,19 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
     var isDurationMenuExpanded by remember { mutableStateOf(false) }
     var isFollowingUser by remember { mutableStateOf(true) }
     
+    // Initial map centering
+    LaunchedEffect(Unit) {
+        try {
+            fusedLocationClient.lastLocation.addOnSuccessListener { lastLoc ->
+                if (lastLoc != null && location == null) {
+                    mapViewInstance.value?.controller?.setCenter(GeoPoint(lastLoc.latitude, lastLoc.longitude))
+                }
+            }
+        } catch (e: SecurityException) {
+            e.printStackTrace()
+        }
+    }
+    
     var isPanelExpanded by remember { mutableStateOf(false) }
     val configuration = LocalConfiguration.current
     val haptic = LocalHapticFeedback.current
@@ -294,25 +317,14 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
         onDispose { lifecycle.removeObserver(observer) }
     }
 
-    // Use CartoDB Dark Matter tiles - highly reliable and clear for dark theme
-    val darkTileSource = remember {
-        XYTileSource(
-            "CartoDark",
-            1, 19, 256, ".png",
-            arrayOf(
-                "https://a.basemaps.cartocdn.com/dark_all/",
-                "https://b.basemaps.cartocdn.com/dark_all/",
-                "https://c.basemaps.cartocdn.com/dark_all/",
-                "https://d.basemaps.cartocdn.com/dark_all/"
-            )
-        )
-    }
+    // Use default OSM tiles for clarity
+    val mapTileSource = TileSourceFactory.MAPNIK
 
     Box(modifier = modifier.fillMaxSize()) {
         AndroidView(
             factory = { ctx ->
                 MapView(ctx).apply {
-                    setTileSource(darkTileSource)
+                    setTileSource(mapTileSource)
                     setMultiTouchControls(true)
                     setUseDataConnection(true)
                     controller.setZoom(16.0)
@@ -326,7 +338,7 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                     overlays.add(rotationGestureOverlay)
 
                     val copyrightOverlay = CopyrightOverlay(ctx).apply {
-                        setCopyrightNotice("© CartoDB, © OpenStreetMap contributors")
+                        setCopyrightNotice("© OpenStreetMap contributors")
                     }
                     overlays.add(copyrightOverlay)
 
@@ -377,7 +389,7 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                     if (filteredPoints.isNotEmpty()) {
                         val polyline = Polyline().apply {
                             setPoints(filteredPoints.map { GeoPoint(it.latitude, it.longitude) })
-                            outlinePaint.color = android.graphics.Color.CYAN
+                            outlinePaint.color = android.graphics.Color.RED
                             outlinePaint.strokeWidth = 10f
                         }
                         view.overlays.add(polyline)
@@ -395,7 +407,7 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                 .align(Alignment.TopEnd)
                 .padding(top = 48.dp, end = 20.dp)
                 .shadow(
-                    elevation = 20.dp,
+                    elevation = 48.dp,
                     shape = RoundedCornerShape(24.dp),
                     spotColor = syncColor,
                     ambientColor = syncColor
@@ -452,7 +464,8 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
             },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(bottom = fabPadding, end = 20.dp),
+                .padding(bottom = fabPadding, end = 20.dp)
+                .shadow(elevation = 32.dp, shape = CircleShape, spotColor = MaterialTheme.colorScheme.primary),
             containerColor = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.primary
         ) {
@@ -465,12 +478,13 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                 .fillMaxWidth()
                 .height(panelHeight)
                 .shadow(
-                    elevation = 24.dp,
-                    shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-                    spotColor = Color(0xFF00008B),
-                    ambientColor = Color(0xFF00008B)
+                    elevation = 60.dp,
+                    shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
+                    spotColor = Color.Black.copy(alpha = 0.5f),
+                    ambientColor = Color.Black.copy(alpha = 0.3f)
                 ),
-            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            // Square bottom corners to sit flush with the screen edge
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
             tonalElevation = 8.dp
         ) {
             Column(
@@ -515,22 +529,66 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
-                                Text("Synced: $syncedCount", style = MaterialTheme.typography.titleMedium)
-                                Text("Unsynced: $unsyncedCount", 
-                                    style = MaterialTheme.typography.titleMedium, 
-                                    color = if(unsyncedCount > 0) PROJECT_Red else MaterialTheme.colorScheme.onSurface)
-                                Text("Total Points: ${allPoints.size}", style = MaterialTheme.typography.labelMedium)
+                                val sourceSans = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
+                                val vibrantBlue = Color(0xFF89C9F7)
+                                
+                                Text(
+                                    text = buildAnnotatedString {
+                                        withStyle(SpanStyle(fontWeight = FontWeight.Medium)) { append("Synced: ") }
+                                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append("$syncedCount") }
+                                    },
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = sourceSans),
+                                    color = vibrantBlue
+                                )
+                                Text(
+                                    text = buildAnnotatedString {
+                                        withStyle(SpanStyle(fontWeight = FontWeight.Medium)) { append("Unsynced: ") }
+                                        withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = vibrantBlue)) { append("$unsyncedCount") }
+                                    },
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = sourceSans),
+                                    color = if(unsyncedCount > 0) PROJECT_Red else MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = buildAnnotatedString {
+                                        withStyle(SpanStyle(fontWeight = FontWeight.Medium)) { append("Total Points: ") }
+                                        withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = vibrantBlue)) { append("${allPoints.size}") }
+                                    },
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = sourceSans)
+                                )
                             }
 
                             Column(horizontalAlignment = Alignment.End) {
                                 val lastPoint = allPoints.lastOrNull()
                                 val dist = lastPoint?.totalDistance?.div(1000) ?: 0f
+                                
+                                // Calculate unique days travelled
+                                val uniqueDays = allPoints.map { 
+                                    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(it.timestamp)) 
+                                }.distinct().size
+
+                                Surface(
+                                    color = Color(0xFFD5E5F3),
+                                    shape = CircleShape,
+                                    modifier = Modifier.padding(bottom = 4.dp)
+                                ) {
+                                    Text(
+                                        text = String.format("%.2f km", dist),
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                                        style = MaterialTheme.typography.headlineMedium.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
+                                        ),
+                                        color = Color(0xFF89C9F7)
+                                    )
+                                }
+                                
                                 Text(
-                                    text = String.format("%.2f km", dist),
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    color = MaterialTheme.colorScheme.primary
+                                    text = "Past $uniqueDays days | Travelled", 
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Light,
+                                        fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
+                                    )
                                 )
-                                Text("Travelled", style = MaterialTheme.typography.labelSmall)
                             }
                         }
 
@@ -552,7 +610,13 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                             ) {
                                 Icon(Icons.Rounded.FileDownload, null)
                                 Spacer(Modifier.width(8.dp))
-                                Text("Export")
+                                Text(
+                                    text = "Export",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = FontWeight.Medium,
+                                        fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
+                                    )
+                                )
                             }
 
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -575,7 +639,13 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                                 ) {
                                     Icon(Icons.Rounded.History, null)
                                     Spacer(Modifier.width(8.dp))
-                                    Text("Duration: $selectedDuration")
+                                    Text(
+                                        text = "Duration: $selectedDuration",
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontWeight = FontWeight.Light,
+                                            fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
+                                        )
+                                    )
                                 }
                                 DropdownMenu(
                                     expanded = isDurationMenuExpanded,
@@ -583,7 +653,15 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                                 ) {
                                     listOf("Last Hour", "Last 24h", "All").forEach { duration ->
                                         DropdownMenuItem(
-                                            text = { Text(duration) },
+                                            text = { 
+                                                Text(
+                                                    text = duration,
+                                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                                        fontWeight = FontWeight.Light,
+                                                        fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
+                                                    )
+                                                ) 
+                                            },
                                             onClick = {
                                                 selectedDuration = duration
                                                 isDurationMenuExpanded = false
