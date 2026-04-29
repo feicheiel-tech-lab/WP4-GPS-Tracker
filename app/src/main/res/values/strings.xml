@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">WP4 - GPSTracker</string>
+    <string name="notification_title">MovingIMPACT WP4 - GPSTracker</string>
+    <string name="location">Sunyani</string>
+    <string name="notification_text">Location: %1$s</string>
+    <string name="str_ntf_about_statusDot">Indicates status of GPS provider client</string>
+</resources>
