@@ -53,6 +53,8 @@ class ForeGroundService: Service() {
     private var kalmanLat: KalmanFilter? = null
     private var kalmanLon: KalmanFilter? = null
 
+    private var trackWhenNotMoving = false
+
     companion object {
         //This allows MainActivity to Observe the location without its own client
         private val _currentLocation = MutableStateFlow<Location?>(null)
@@ -60,6 +62,9 @@ class ForeGroundService: Service() {
 
         private val _currentStatus = MutableStateFlow<Status>(Status.SEARCHING)
         val currentStatus = _currentStatus.asStateFlow()
+
+        private val _isRunning = MutableStateFlow(false)
+        val isRunning = _isRunning.asStateFlow()
     }
 
     //only updates the notification if the city name is different
@@ -126,7 +131,7 @@ class ForeGroundService: Service() {
                     // 4. Check movement and save
                     val isMoving = if (filteredLocation.hasSpeed()) filteredLocation.speed > 0.6f else true
                     
-                    if (isMoving && currentUserId != null) {
+                    if ((isMoving || trackWhenNotMoving) && currentUserId != null) {
                         serviceScope.launch {
                             val lastPoint = database.locationDao().getLastPoint(currentUserId!!)
                             var distanceToPrev = 0f
@@ -171,6 +176,7 @@ class ForeGroundService: Service() {
         // Retrieve current user ID from SharedPreferences - Default to "default_user"
         val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
         currentUserId = prefs.getString("current_user_id", "default_user") ?: "default_user"
+        trackWhenNotMoving = prefs.getBoolean("track_when_not_moving", false)
     }
 
     override fun onDestroy() {
@@ -190,23 +196,37 @@ class ForeGroundService: Service() {
 
         when(action){
             Actions.START.toString() -> {
+                val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+                trackWhenNotMoving = prefs.getBoolean("track_when_not_moving", false)
                 start() // Ensures notification is shown/refreshed
                 if (!isServiceStarted) {
                     startLocationUpdates()
                     isServiceStarted = true
+                    _isRunning.value = true
                 }
             }
             Actions.STOP.toString() -> {
                 stopLocationUpdates()
                 stopSelf()
                 isServiceStarted = false
+                _isRunning.value = false
+            }
+            Actions.SYNC.toString() -> {
+                syncData()
+            }
+            "UPDATE_SETTINGS" -> {
+                val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+                trackWhenNotMoving = prefs.getBoolean("track_when_not_moving", false)
             }
             else -> {
                 //Handle system restart (START_STICKY)
                 if (intent == null && !isServiceStarted) {
+                    val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+                    trackWhenNotMoving = prefs.getBoolean("track_when_not_moving", false)
                     start()
                     startLocationUpdates()
                     isServiceStarted = true
+                    _isRunning.value = true
                 }
             }
         }
@@ -260,7 +280,7 @@ class ForeGroundService: Service() {
     }
 
     enum class Actions {
-        START, STOP, UPDATE
+        START, STOP, UPDATE, SYNC
     }
 
     enum class Status {
@@ -333,7 +353,46 @@ class ForeGroundService: Service() {
         val statsText = String.format("%.2f km | %d pts", distanceKm, pointsCount)
         
         remoteViews.setTextViewText(R.id.txt_ntf_stats, statsText)
-        notificationManager.notify(NOTIFICATION_ID, builder.build())
+
+        // Check for unsynced points to show sync button
+        serviceScope.launch {
+            val unsyncedCount = if (currentUserId != null) {
+                database.locationDao().getUnsyncedPoints(currentUserId!!).size
+            } else 0
+
+            if (unsyncedCount > 0) {
+                val syncIntent = Intent(this@ForeGroundService, ForeGroundService::class.java).apply {
+                    action = Actions.SYNC.toString()
+                }
+                val syncPendingIntent = PendingIntent.getService(
+                    this@ForeGroundService, 
+                    1, 
+                    syncIntent, 
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                )
+                remoteViews.setViewVisibility(R.id.btn_ntf_sync, android.view.View.VISIBLE)
+                remoteViews.setOnClickPendingIntent(R.id.btn_ntf_sync, syncPendingIntent)
+            } else {
+                remoteViews.setViewVisibility(R.id.btn_ntf_sync, android.view.View.GONE)
+            }
+            notificationManager.notify(NOTIFICATION_ID, builder.build())
+        }
+    }
+
+    private fun syncData() {
+        if (currentUserId == null) return
+        serviceScope.launch {
+            val unsyncedPoints = database.locationDao().getUnsyncedPoints(currentUserId!!)
+            if (unsyncedPoints.isNotEmpty()) {
+                val syncedPoints = unsyncedPoints.map { it.copy(isSynced = true) }
+                database.locationDao().markAsSynced(syncedPoints)
+                
+                // Refresh notification UI
+                val allPoints = database.locationDao().getAllPoints(currentUserId!!)
+                val lastPoint = allPoints.lastOrNull()
+                updateStatsUI(lastPoint?.totalDistance ?: 0f, allPoints.size)
+            }
+        }
     }
 
     private val providerReceiver = object : BroadcastReceiver() {

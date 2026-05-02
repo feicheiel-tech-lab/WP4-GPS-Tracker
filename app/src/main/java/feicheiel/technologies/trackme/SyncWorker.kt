@@ -22,36 +22,43 @@ class SyncWorker(appContext: Context, workerParams: WorkerParameters) :
         val userId = prefs.getString("current_user_id", null) ?: return Result.failure()
         val authToken = prefs.getString("auth_token", "") ?: ""
 
-        // Fetch all unsynced points for this specific user
-        val points = database.locationDao().getUnsyncedPoints(userId)
+        val unsyncedPoints = database.locationDao().getUnsyncedPoints(userId)
 
-        if (points.isEmpty()) {
+        if (unsyncedPoints.isEmpty()) {
             Log.d("SyncWorker", "No new points to sync for user: $userId")
             return Result.success()
         }
 
         return try {
+            val batchSize = 100
             val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
-            val geoRequests = points.map { 
-                GeoPointRequest(
-                    device = userId,
-                    latitude = it.latitude,
-                    longitude = it.longitude,
-                    timestamp = sdf.format(Date(it.timestamp))
-                )
-            }
-
-            val response = apiService.uploadPoints("Bearer $authToken", geoRequests)
             
-            if (response.isSuccessful) {
-                val syncedPoints = points.map { it.copy(isSynced = true) }
-                database.locationDao().markAsSynced(syncedPoints)
-                Log.d("SyncWorker", "Successfully synced ${points.size} points for user: $userId")
-                Result.success()
-            } else {
-                Log.e("SyncWorker", "Upload failed: ${response.code()}")
-                Result.retry()
+            for (i in 0 until unsyncedPoints.size step batchSize) {
+                val end = (i + batchSize).coerceAtMost(unsyncedPoints.size)
+                val batch = unsyncedPoints.subList(i, end)
+                
+                val geoRequests = batch.map { 
+                    GeoPointRequest(
+                        device = userId,
+                        latitude = it.latitude,
+                        longitude = it.longitude,
+                        timestamp = sdf.format(Date(it.timestamp))
+                    )
+                }
+
+                val response = apiService.uploadPoints("Bearer $authToken", geoRequests)
+                
+                if (response.isSuccessful) {
+                    val syncedBatch = batch.map { it.copy(isSynced = true) }
+                    database.locationDao().markAsSynced(syncedBatch)
+                } else {
+                    Log.e("SyncWorker", "Batch upload failed: ${response.code()}")
+                    return Result.retry()
+                }
             }
+            
+            Log.d("SyncWorker", "Successfully synced all points for user: $userId")
+            Result.success()
         } catch (e: Exception) {
             Log.e("SyncWorker", "Error syncing points: ${e.message}")
             Result.retry()

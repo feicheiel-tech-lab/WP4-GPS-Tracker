@@ -17,7 +17,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,7 +24,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -34,7 +32,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -54,14 +51,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.buildAnnotatedString
@@ -73,63 +66,157 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.lifecycleScope
 import feicheiel.technologies.trackme.ui.theme.PROJECT_Red
 import feicheiel.technologies.trackme.ui.theme.PROJECT_Yellow
 import feicheiel.technologies.trackme.ui.theme.TrackMeTheme
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.android.gms.location.LocationServices
 import org.osmdroid.config.Configuration
-import org.osmdroid.events.MapListener
-import org.osmdroid.events.ScrollEvent
-import org.osmdroid.events.ZoomEvent
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
-import org.osmdroid.views.overlay.compass.CompassOverlay
-import org.osmdroid.views.overlay.compass.InternalCompassOrientationProvider
 import org.osmdroid.views.overlay.gestures.RotationGestureOverlay
 
 import java.io.File
 import java.io.FileOutputStream
-import org.osmdroid.tileprovider.tilesource.XYTileSource
-import org.osmdroid.tileprovider.util.SimpleRegisterReceiver
-import org.osmdroid.tileprovider.tilesource.ITileSource
 import org.osmdroid.views.overlay.CopyrightOverlay
 import androidx.compose.ui.platform.ComposeView
 
 import androidx.compose.material.icons.rounded.FileDownload
 import android.widget.Toast
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.await
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
-import androidx.compose.material3.IconButton
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalHapticFeedback
-import com.airbnb.lottie.compose.LottieAnimation
-import com.airbnb.lottie.compose.LottieCompositionSpec
-import com.airbnb.lottie.compose.LottieConstants
-import com.airbnb.lottie.compose.animateLottieCompositionAsState
-import com.airbnb.lottie.compose.rememberLottieComposition
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.runtime.rememberCompositionContext
 import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.res.stringResource
 
 class MainActivity : ComponentActivity() {
+
+    private var isLoggingOut = false
+
+    private val openDocumentLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            lifecycleScope.launch {
+                val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+                val userId = prefs.getString("current_user_id", "default_user") ?: "default_user"
+                val importedCount = importCsvFromUri(this@MainActivity, it, userId)
+                if (importedCount > 0) {
+                    Toast.makeText(this@MainActivity, "Imported $importedCount new points", Toast.LENGTH_SHORT).show()
+                } else if (importedCount == 0) {
+                    Toast.makeText(this@MainActivity, "No new points to import", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@MainActivity, "Import failed", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun initiateImport() {
+        openDocumentLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "application/csv"))
+    }
+
+    private val createDocumentLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        uri?.let {
+            lifecycleScope.launch {
+                val database = AppDatabase.getDatabase(this@MainActivity)
+                val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+                val userId = prefs.getString("current_user_id", "default_user") ?: "default_user"
+                val points = database.locationDao().getAllPoints(userId)
+                
+                if (writeCsvToUri(this@MainActivity, it, points)) {
+                    Toast.makeText(this@MainActivity, "Export successful", Toast.LENGTH_SHORT).show()
+                    if (isLoggingOut) {
+                        performFinalLogout(userId)
+                    }
+                } else {
+                    Toast.makeText(this@MainActivity, "Export failed", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun initiateExport() {
+        isLoggingOut = false
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val prefs = getSharedPreferences("user_prefs", MODE_PRIVATE)
+        val userId = prefs.getString("current_user_id", "user") ?: "user"
+        createDocumentLauncher.launch("trackme_export_${userId}_$timestamp.csv")
+    }
+
+    private fun initiateLogout() {
+        lifecycleScope.launch {
+            val database = AppDatabase.getDatabase(this@MainActivity)
+            val prefs = getSharedPreferences("user_prefs", MODE_PRIVATE)
+            val userId = prefs.getString("current_user_id", "default_user") ?: "default_user"
+            
+            val unsyncedCount = database.locationDao().getUnsyncedCount(userId)
+            if (unsyncedCount > 0) {
+                Toast.makeText(this@MainActivity, "Syncing $unsyncedCount unsynced points...", Toast.LENGTH_SHORT).show()
+                val workRequest = OneTimeWorkRequestBuilder<SyncWorker>().build()
+                WorkManager.getInstance(this@MainActivity).enqueue(workRequest)
+            }
+            
+            isLoggingOut = true
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            createDocumentLauncher.launch("trackme_export_${userId}_$timestamp.csv")
+        }
+    }
+
+    private fun performFinalLogout(userId: String) {
+        // Stop the service
+        Intent(this, ForeGroundService::class.java).also {
+            it.action = ForeGroundService.Actions.STOP.toString()
+            startService(it)
+        }
+
+        lifecycleScope.launch {
+            val database = AppDatabase.getDatabase(this@MainActivity)
+            database.locationDao().deleteAll(userId)
+
+            getSharedPreferences("auth", Context.MODE_PRIVATE).edit().clear().apply()
+            getSharedPreferences("user_prefs", Context.MODE_PRIVATE).edit().clear().apply()
+
+            startActivity(Intent(this@MainActivity, feicheiel.technologies.trackme.ui.AuthActivity::class.java))
+            finish()
+        }
+    }
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -144,6 +231,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        val sharedPref = getSharedPreferences("auth", Context.MODE_PRIVATE)
+        val userPrefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+        val isLoggedIn = sharedPref.getString("user_id", null) != null || userPrefs.getString("current_user_id", null) != null
+
+        if (!isLoggedIn) {
+            startActivity(Intent(this, feicheiel.technologies.trackme.ui.AuthActivity::class.java))
+            finish()
+            return
+        }
 
         if (hasRequiredPermissions()) {
             startTrackingService()
@@ -162,13 +259,18 @@ class MainActivity : ComponentActivity() {
         Configuration.getInstance().osmdroidTileCache = File(basePath, "tiles")
         
         // Copy offline map from assets if it exists
-        copyOfflineMapFromAssets("bono_ahafo.mbtiles")
+        copyOfflineMapFromAssets("aoi.mbtiles")
 
         setContent {
             TrackMeTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     // Anchor to the absolute bottom by only applying top padding from the scaffold
-                    OSMMapScreen(modifier = Modifier.padding(top = innerPadding.calculateTopPadding()))
+                    OSMMapScreen(
+                        modifier = Modifier.padding(top = innerPadding.calculateTopPadding()),
+                        onLogout = { initiateLogout() },
+                        onExport = { initiateExport() },
+                        onImport = { initiateImport() }
+                    )
                 }
             }
         }
@@ -228,13 +330,23 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
 }
 
 @Composable
-fun OSMMapScreen(modifier: Modifier = Modifier) {
+fun OSMMapScreen(
+    modifier: Modifier = Modifier,
+    onLogout: () -> Unit,
+    onExport: () -> Unit,
+    onImport: () -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val database = remember { AppDatabase.getDatabase(context) }
+    
+    val workManager = remember { WorkManager.getInstance(context) }
+    val syncWorkInfo by workManager.getWorkInfosByTagFlow("sync_tag").collectAsStateWithLifecycle(initialValue = emptyList())
+    val isSyncing = syncWorkInfo.any { it.state == androidx.work.WorkInfo.State.RUNNING || it.state == androidx.work.WorkInfo.State.ENQUEUED }
     
     // Attempt to get last known location for initial center
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
@@ -244,6 +356,7 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
 
     val location by ForeGroundService.currentLocation.collectAsState()
     val status by ForeGroundService.currentStatus.collectAsState()
+    val isServiceRunning by ForeGroundService.isRunning.collectAsState()
     val syncedCount by database.locationDao().getSyncedCountFlow(userId).collectAsState(initial = 0)
     val unsyncedCount by database.locationDao().getUnsyncedCountFlow(userId).collectAsState(initial = 0)
     val allPoints by database.locationDao().getAllPointsFlow(userId).collectAsState(initial = emptyList())
@@ -280,7 +393,10 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
         try {
             fusedLocationClient.lastLocation.addOnSuccessListener { lastLoc ->
                 if (lastLoc != null && location == null) {
-                    mapViewInstance.value?.controller?.setCenter(GeoPoint(lastLoc.latitude, lastLoc.longitude))
+                    mapViewInstance.value?.controller?.apply {
+                        setCenter(GeoPoint(lastLoc.latitude, lastLoc.longitude))
+                        setZoom(23.0)
+                    }
                 }
             }
         } catch (e: SecurityException) {
@@ -292,8 +408,8 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
     val configuration = LocalConfiguration.current
     val haptic = LocalHapticFeedback.current
     val screenHeight = configuration.screenHeightDp.dp
-    val expandedHeight = screenHeight * 0.35f
-    val collapsedHeight = 35.dp // Very compact collapsed state
+    val expandedHeight = screenHeight * 0.27f
+    val collapsedHeight = 37.dp // Very compact collapsed state
     
     val panelHeight by animateDpAsState(
         targetValue = if (isPanelExpanded) expandedHeight else collapsedHeight,
@@ -320,14 +436,98 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
     // Use default OSM tiles for clarity
     val mapTileSource = TileSourceFactory.MAPNIK
 
-    Box(modifier = modifier.fillMaxSize()) {
-        AndroidView(
-            factory = { ctx ->
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = false,
+        drawerContent = {
+            ModalDrawerSheet {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp, end = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.app_name),
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
+                    )
+                    //Spacer(Modifier.width(16.dp))
+                    IconButton(onClick = { scope.launch { drawerState.close() } }) {
+                        Icon(Icons.Default.Close, contentDescription = "Close")
+                    }
+                }
+                HorizontalDivider()
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Rounded.CloudSync, contentDescription = null) },
+                    label = { Text("Sync Now") },
+                    selected = false,
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            val intent = Intent(context, SyncForegroundService::class.java).apply {
+                                action = SyncForegroundService.ACTION_START_SYNC
+                            }
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                context.startForegroundService(intent)
+                            } else {
+                                context.startService(intent)
+                            }
+                        }
+                    },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Rounded.History, contentDescription = null) },
+                    label = { Text("Export Tracks") },
+                    selected = false,
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            onExport()
+                        }
+                    },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Rounded.FileDownload, contentDescription = null) },
+                    label = { Text("Import Tracks") },
+                    selected = false,
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            onImport()
+                        }
+                    },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+                Spacer(Modifier.weight(1f))
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.Logout, contentDescription = null, tint = Color.Red) },
+                    label = { Text("Sign Out", color = Color.Red) },
+                    selected = false,
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            onLogout()
+                        }
+                    },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+            }
+        }
+    ) {
+        Box(modifier = modifier.fillMaxSize()) {
+            AndroidView(
+                factory = { ctx ->
                 MapView(ctx).apply {
                     setTileSource(mapTileSource)
                     setMultiTouchControls(true)
                     setUseDataConnection(true)
-                    controller.setZoom(16.0)
+                    controller.setZoom(23.0)
                     mapViewInstance.value = this
 
                     clipChildren = false
@@ -365,6 +565,10 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                             0, 0
                         )
                         view.addView(indicatorComposeView, lp)
+                        
+                        // Center and zoom on first location reception
+                        view.controller.setCenter(userPoint)
+                        view.controller.setZoom(23.0)
                     } else {
                         val lp = indicatorComposeView.layoutParams as MapView.LayoutParams
                         lp.geoPoint = userPoint
@@ -377,7 +581,7 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                 }
 
                 view.overlays.removeAll { it is Polyline }
-                if (isDrawTracksEnabled) {
+                if (isDrawTracksEnabled && allPoints.isNotEmpty()) {
                     val now = System.currentTimeMillis()
                     val filteredPoints = allPoints.filter { 
                         when(selectedDuration) {
@@ -386,19 +590,81 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                             else -> true
                         }
                     }
+
                     if (filteredPoints.isNotEmpty()) {
-                        val polyline = Polyline().apply {
-                            setPoints(filteredPoints.map { GeoPoint(it.latitude, it.longitude) })
-                            outlinePaint.color = android.graphics.Color.RED
-                            outlinePaint.strokeWidth = 10f
+                        val minTs = filteredPoints.minOf { it.timestamp }
+                        val maxTs = filteredPoints.maxOf { it.timestamp }
+                        val tsRange = (maxTs - minTs).coerceAtLeast(1L)
+
+                        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                        val todayKey = sdf.format(Date(now))
+                        val pointsByDay = filteredPoints.groupBy { sdf.format(Date(it.timestamp)) }
+
+                        pointsByDay.forEach { (dayKey, dayPoints) ->
+                            // Today is Orange-Red, others are Grey
+                            val dayBaseColor = if (dayKey == todayKey) {
+                                android.graphics.Color.parseColor("#FF4500") // OrangeRed
+                            } else {
+                                android.graphics.Color.parseColor("#808080") // Gray
+                            }
+
+                            // Split day points into continuous segments where gaps are <= 2 minutes
+                            val continuousSegments = mutableListOf<MutableList<LocationEntity>>()
+                            if (dayPoints.isNotEmpty()) {
+                                var currentSegment = mutableListOf(dayPoints[0])
+                                continuousSegments.add(currentSegment)
+                                for (i in 1 until dayPoints.size) {
+                                    // 120,000 ms = 2 minutes
+                                    if (dayPoints[i].timestamp - dayPoints[i - 1].timestamp > 120000L) {
+                                        currentSegment = mutableListOf(dayPoints[i])
+                                        continuousSegments.add(currentSegment)
+                                    } else {
+                                        currentSegment.add(dayPoints[i])
+                                    }
+                                }
+                            }
+
+                            continuousSegments.forEach { segment ->
+                                // Draw in chunks to allow for alpha gradient over time
+                                // We cap the chunks per segment to maintain performance
+                                val chunksInSegment = (segment.size / 20).coerceIn(1, 25)
+                                val chunkSize = (segment.size / chunksInSegment).coerceAtLeast(2)
+
+                                segment.windowed(chunkSize, chunkSize - 1, true).forEach { chunk ->
+                                    if (chunk.size >= 2) {
+                                        val avgTs = chunk.map { it.timestamp }.average().toLong()
+                                        val alpha = 0.5f + 0.5f * (avgTs - minTs).toFloat() / tsRange.toFloat()
+                                        
+                                        val polyline = Polyline().apply {
+                                            setPoints(chunk.map { GeoPoint(it.latitude, it.longitude) })
+                                            val alphaInt = (alpha * 255).toInt()
+                                            // Merge day color with dynamic alpha
+                                            outlinePaint.color = (dayBaseColor and 0x00FFFFFF) or (alphaInt shl 24)
+                                            outlinePaint.strokeWidth = 12f
+                                        }
+                                        view.overlays.add(polyline)
+                                    }
+                                }
+                            }
                         }
-                        view.overlays.add(polyline)
                     }
                 }
                 view.invalidate()
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        // Menu Button (Top Left)
+        IconButton(
+            onClick = { scope.launch { drawerState.open() } },
+            modifier = Modifier
+                .padding(top = 48.dp, start = 16.dp)
+                .size(48.dp)
+                .background(Color.White.copy(alpha = 0.9f), CircleShape)
+                .align(Alignment.TopStart)
+        ) {
+            Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.Black)
+        }
 
         // SYNC STATUS & BUTTON OVERLAY
         val syncColor = if (unsyncedCount > 0) Color(0xFFFFD355) else Color(0xFF509FB7)
@@ -423,16 +689,30 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                 androidx.compose.material3.IconButton(
                     onClick = { 
                         scope.launch {
-                            val points = database.locationDao().getUnsyncedPoints(userId)
-                            database.locationDao().markAsSynced(points.map { it.copy(isSynced = true) })
+                            val intent = Intent(context, SyncForegroundService::class.java).apply {
+                                action = SyncForegroundService.ACTION_START_SYNC
+                            }
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                context.startForegroundService(intent)
+                            } else {
+                                context.startService(intent)
+                            }
                         }
                     }
                 ) {
-                    Icon(
-                        Icons.Rounded.CloudSync, 
-                        contentDescription = "Sync",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
+                    if (isSyncing) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        Icon(
+                            Icons.Rounded.CloudSync, 
+                            contentDescription = "Sync",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
                 
                 Box(
@@ -465,7 +745,7 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(bottom = fabPadding, end = 20.dp)
-                .shadow(elevation = 32.dp, shape = CircleShape, spotColor = MaterialTheme.colorScheme.primary),
+                .shadow(elevation = 32.dp, shape = RoundedCornerShape(7.dp), spotColor = MaterialTheme.colorScheme.primary),
             containerColor = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.primary
         ) {
@@ -529,29 +809,56 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
-                                val sourceSans = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
+                                val sourceSans =
+                                    feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
                                 val vibrantBlue = Color(0xFF89C9F7)
-                                
+
                                 Text(
                                     text = buildAnnotatedString {
-                                        withStyle(SpanStyle(fontWeight = FontWeight.Medium)) { append("Synced: ") }
-                                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append("$syncedCount") }
+                                        withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
+                                            append(
+                                                "Synced: "
+                                            )
+                                        }
+                                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                                            append(
+                                                "$syncedCount"
+                                            )
+                                        }
                                     },
                                     style = MaterialTheme.typography.bodyLarge.copy(fontFamily = sourceSans),
                                     color = vibrantBlue
                                 )
                                 Text(
                                     text = buildAnnotatedString {
-                                        withStyle(SpanStyle(fontWeight = FontWeight.Medium)) { append("Unsynced: ") }
-                                        withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = vibrantBlue)) { append("$unsyncedCount") }
+                                        withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
+                                            append(
+                                                "Unsynced: "
+                                            )
+                                        }
+                                        withStyle(
+                                            SpanStyle(
+                                                fontWeight = FontWeight.Bold,
+                                                color = vibrantBlue
+                                            )
+                                        ) { append("$unsyncedCount") }
                                     },
                                     style = MaterialTheme.typography.bodyLarge.copy(fontFamily = sourceSans),
-                                    color = if(unsyncedCount > 0) PROJECT_Red else MaterialTheme.colorScheme.onSurface
+                                    color = if (unsyncedCount > 0) PROJECT_Red else MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
                                     text = buildAnnotatedString {
-                                        withStyle(SpanStyle(fontWeight = FontWeight.Medium)) { append("Total Points: ") }
-                                        withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = vibrantBlue)) { append("${allPoints.size}") }
+                                        withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
+                                            append(
+                                                "Total Points: "
+                                            )
+                                        }
+                                        withStyle(
+                                            SpanStyle(
+                                                fontWeight = FontWeight.Bold,
+                                                color = vibrantBlue
+                                            )
+                                        ) { append("${allPoints.size}") }
                                     },
                                     style = MaterialTheme.typography.bodyLarge.copy(fontFamily = sourceSans)
                                 )
@@ -560,10 +867,14 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                             Column(horizontalAlignment = Alignment.End) {
                                 val lastPoint = allPoints.lastOrNull()
                                 val dist = lastPoint?.totalDistance?.div(1000) ?: 0f
-                                
+
                                 // Calculate unique days travelled
-                                val uniqueDays = allPoints.map { 
-                                    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(it.timestamp)) 
+                                val uniqueDays = allPoints.map {
+                                    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(
+                                        Date(
+                                            it.timestamp
+                                        )
+                                    )
                                 }.distinct().size
 
                                 Surface(
@@ -573,7 +884,10 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                                 ) {
                                     Text(
                                         text = String.format("%.2f km", dist),
-                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                                        modifier = Modifier.padding(
+                                            horizontal = 16.dp,
+                                            vertical = 6.dp
+                                        ),
                                         style = MaterialTheme.typography.headlineMedium.copy(
                                             fontWeight = FontWeight.Bold,
                                             fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
@@ -581,9 +895,9 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                                         color = Color(0xFF89C9F7)
                                     )
                                 }
-                                
+
                                 Text(
-                                    text = "Past $uniqueDays days | Travelled", 
+                                    text = "Past $uniqueDays days | Travelled",
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontWeight = androidx.compose.ui.text.font.FontWeight.Light,
                                         fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
@@ -594,36 +908,65 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
 
                         HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
 
+                        if (isSyncing) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("Syncing...", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+
+                        var trackWhenNotMoving by remember { 
+                            mutableStateOf(prefs.getBoolean("track_when_not_moving", false)) 
+                        }
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Button(
-                                onClick = {
-                                    scope.launch {
-                                        val success = exportDatabaseToCsv(context, allPoints)
-                                        if (success) Toast.makeText(context, "CSV exported", Toast.LENGTH_SHORT).show()
+                            Text("Track even when not moving", style = MaterialTheme.typography.bodyMedium)
+                            Switch(
+                                checked = trackWhenNotMoving,
+                                onCheckedChange = { 
+                                    trackWhenNotMoving = it
+                                    prefs.edit().putBoolean("track_when_not_moving", it).apply()
+                                    // Notify service
+                                    val intent = Intent(context, ForeGroundService::class.java).apply {
+                                        action = "UPDATE_SETTINGS"
                                     }
-                                },
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(Icons.Rounded.FileDownload, null)
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    text = "Export",
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontWeight = FontWeight.Medium,
-                                        fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
-                                    )
-                                )
-                            }
+                                    context.startService(intent)
+                                }
+                            )
+                        }
 
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Tracks", style = MaterialTheme.typography.bodyMedium)
-                                Spacer(Modifier.width(8.dp))
-                                Switch(checked = isDrawTracksEnabled, onCheckedChange = { isDrawTracksEnabled = it })
-                            }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Tracks (Live Tracking)", style = MaterialTheme.typography.bodyMedium)
+                            Switch(
+                                checked = isServiceRunning,
+                                onCheckedChange = { enabled ->
+                                    val intent = Intent(context, ForeGroundService::class.java).apply {
+                                        action = if (enabled) ForeGroundService.Actions.START.toString() 
+                                                 else ForeGroundService.Actions.STOP.toString()
+                                    }
+                                    if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                        context.startForegroundService(intent)
+                                    } else {
+                                        context.startService(intent)
+                                    }
+                                }
+                            )
                         }
 
                         if (isDrawTracksEnabled) {
@@ -653,14 +996,14 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
                                 ) {
                                     listOf("Last Hour", "Last 24h", "All").forEach { duration ->
                                         DropdownMenuItem(
-                                            text = { 
+                                            text = {
                                                 Text(
                                                     text = duration,
                                                     style = MaterialTheme.typography.bodyMedium.copy(
                                                         fontWeight = FontWeight.Light,
                                                         fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
                                                     )
-                                                ) 
+                                                )
                                             },
                                             onClick = {
                                                 selectedDuration = duration
@@ -677,46 +1020,75 @@ fun OSMMapScreen(modifier: Modifier = Modifier) {
         }
     }
 }
+}
 
-suspend fun exportDatabaseToCsv(context: Context, points: List<LocationEntity>): Boolean {
-    if (points.isEmpty()) return false
-    
-    val fileName = "location_export_${System.currentTimeMillis()}.csv"
-    val csvHeader = "ID,UserID,Latitude,Longitude,Timestamp,Speed,Accuracy,DistancePrev,TotalDistance,IsSynced\n"
-    val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-    
-    val csvData = StringBuilder()
-    csvData.append(csvHeader)
-    
-    points.forEach { point ->
-        csvData.append("${point.id},")
-        csvData.append("${point.userId},")
-        csvData.append("${point.latitude},")
-        csvData.append("${point.longitude},")
-        csvData.append("${sdf.format(Date(point.timestamp))},")
-        csvData.append("${point.speed ?: 0f},")
-        csvData.append("${point.accuracy},")
-        csvData.append("${point.distanceFromPrevious},")
-        csvData.append("${point.totalDistance},")
-        csvData.append("${point.isSynced}\n")
-    }
-    
+suspend fun importCsvFromUri(context: Context, uri: Uri, currentUserId: String): Int {
     return try {
-        val file = File(context.getExternalFilesDir(null), fileName)
-        file.writeText(csvData.toString())
+        val database = AppDatabase.getDatabase(context)
+        val existingTimestamps = database.locationDao().getAllTimestamps(currentUserId).toSet()
+        val newPoints = mutableListOf<LocationEntity>()
         
-        // Use Intent to share or view the file
-        val uri = androidx.core.content.FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.provider",
-            file
-        )
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/csv"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            val reader = inputStream.bufferedReader()
+            val _header = reader.readLine() // Skip header
+            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+            
+            reader.forEachLine { line ->
+                val parts = line.split(",")
+                if (parts.size >= 10) {
+                    try {
+                        // ID,UserID,Latitude,Longitude,Timestamp,Speed,Accuracy,DistancePrev,TotalDistance,IsSynced
+                        val lat = parts[2].toDouble()
+                        val lon = parts[3].toDouble()
+                        val tsText = parts[4]
+                        val timestamp = try {
+                            sdf.parse(tsText)?.time ?: tsText.toLong()
+                        } catch (e: Exception) {
+                            tsText.toLong()
+                        }
+                        
+                        if (!existingTimestamps.contains(timestamp)) {
+                            newPoints.add(LocationEntity(
+                                userId = currentUserId,
+                                latitude = lat,
+                                longitude = lon,
+                                timestamp = timestamp,
+                                speed = parts[5].toFloatOrNull(),
+                                accuracy = parts[6].toFloatOrNull() ?: 0f,
+                                distanceFromPrevious = parts[7].toFloatOrNull() ?: 0f,
+                                totalDistance = parts[8].toFloatOrNull() ?: 0f,
+                                isSynced = false // Set to false so it can be uploaded
+                            ))
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
         }
-        context.startActivity(Intent.createChooser(intent, "Share CSV Export"))
+        
+        if (newPoints.isNotEmpty()) {
+            database.locationDao().insertAll(newPoints)
+        }
+        newPoints.size
+    } catch (e: Exception) {
+        e.printStackTrace()
+        -1
+    }
+}
+
+suspend fun writeCsvToUri(context: Context, uri: Uri, points: List<LocationEntity>): Boolean {
+    return try {
+        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+            val csvHeader = "ID,UserID,Latitude,Longitude,Timestamp,Speed,Accuracy,DistancePrev,TotalDistance,IsSynced\n"
+            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+            
+            outputStream.write(csvHeader.toByteArray())
+            points.forEach { point ->
+                val line = "${point.id},${point.userId},${point.latitude},${point.longitude},${sdf.format(Date(point.timestamp))},${point.speed ?: 0f},${point.accuracy},${point.distanceFromPrevious},${point.totalDistance},${point.isSynced}\n"
+                outputStream.write(line.toByteArray())
+            }
+        }
         true
     } catch (e: Exception) {
         e.printStackTrace()
@@ -780,3 +1152,4 @@ fun LocationGlowIndicator(status: ForeGroundService.Status) {
 fun AppPreview() {
     LocationGlowIndicator(ForeGroundService.Status.ACTIVE)
 }
+

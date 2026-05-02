@@ -12,6 +12,7 @@ kotlin = "2.2.10"
 composeBom = "2026.02.01"
 playServicesLocation = "21.3.0"
 playServicesGeocoder = "16.0.0"
+playServicesAuth = "21.5.1"
 roomCompiler = "2.5.0"
 workRuntimeKtx = "2.11.2"
 osmdroid = "6.1.20"
@@ -47,6 +48,7 @@ androidx-compose-ui-text-google-fonts = { group = "androidx.compose.ui", name = 
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 play-services-location = { module = "com.google.android.gms:play-services-location", version.ref = "playServicesLocation" }
 play-services-geocoder = { group = "com.google.android.gms", name = "play-services-geocoder", version.ref = "playServicesGeocoder" }
+play-services-auth = { group = "com.google.android.gms", name = "play-services-auth", version.ref = "playServicesAuth" }
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }

@@ -11,6 +11,12 @@ interface LocationDao {
     @Insert
     suspend fun insert(point: LocationEntity)
 
+    @Insert
+    suspend fun insertAll(points: List<LocationEntity>)
+
+    @Query("SELECT timestamp FROM location_points WHERE userId = :userId")
+    suspend fun getAllTimestamps(userId: String): List<Long>
+
     @Query("SELECT * FROM location_points WHERE isSynced = 0 AND userId = :userId ORDER BY timestamp ASC")
     suspend fun getUnsyncedPoints(userId: String): List<LocationEntity>
 
@@ -25,6 +31,9 @@ interface LocationDao {
 
     @Query("SELECT * FROM location_points WHERE userId = :userId ORDER BY timestamp ASC")
     suspend fun getAllPoints(userId: String): List<LocationEntity>
+    @Query("SELECT COUNT(*) FROM location_points WHERE isSynced = 0 AND userId = :userId")
+    suspend fun getUnsyncedCount(userId: String): Int
+
     @Query("SELECT COUNT(*) FROM location_points WHERE isSynced = 1 AND userId = :userId")
     fun getSyncedCountFlow(userId: String): Flow<Int>
 

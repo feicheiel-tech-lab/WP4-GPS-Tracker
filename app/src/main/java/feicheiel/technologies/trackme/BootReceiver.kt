@@ -10,14 +10,20 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
             intent.action == "android.intent.action.QUICKBOOT_POWERON" ||
             intent.action == Intent.ACTION_REBOOT) {
-            val serviceIntent = Intent(context, ForeGroundService::class.java).apply {
-                action = ForeGroundService.Actions.START.toString()
-            }
+            
+            val sharedPref = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
+            val isLoggedIn = sharedPref.getString("user_id", null) != null
+            
+            if (isLoggedIn) {
+                val serviceIntent = Intent(context, ForeGroundService::class.java).apply {
+                    action = ForeGroundService.Actions.START.toString()
+                }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent)
-            } else {
-                context.startService(serviceIntent)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(serviceIntent)
+                } else {
+                    context.startService(serviceIntent)
+                }
             }
         }
     }
