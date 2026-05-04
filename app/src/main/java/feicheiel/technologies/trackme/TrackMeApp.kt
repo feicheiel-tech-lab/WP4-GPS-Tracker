@@ -13,23 +13,37 @@ import java.util.Calendar
 import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
+import feicheiel.technologies.trackme.api.AuthApi
 import feicheiel.technologies.trackme.api.GeoApi
+import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 class TrackMeApp: Application() {
 
     lateinit var apiService: GeoApi
+    lateinit var authApiService: AuthApi
 
     override fun onCreate() {
         super.onCreate()
         
+        val logging = HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.BODY
+        }
+        
+        val client = OkHttpClient.Builder()
+            .addInterceptor(logging)
+            .build()
+        
         val retrofit = Retrofit.Builder()
-            .baseUrl("http://10.232.1.42:8000/")
+            .baseUrl("http://192.168.8.118:8000/")
+            .client(client)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
         
         apiService = retrofit.create(GeoApi::class.java)
+        authApiService = retrofit.create(AuthApi::class.java)
 
         scheduleMidnightSync()
 

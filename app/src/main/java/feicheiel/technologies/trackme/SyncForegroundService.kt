@@ -33,7 +33,7 @@ class SyncForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_START_SYNC) {
-            startForeground(NOTIFICATION_ID, createNotification("Preparing sync...", 0, 100))
+            startForeground(NOTIFICATION_ID, createNotification("Preparing sync...", 0, 100, ""))
             startSync()
         }
         return START_NOT_STICKY
@@ -47,7 +47,7 @@ class SyncForegroundService : Service() {
                 val database = AppDatabase.getDatabase(applicationContext)
                 val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
                 val userId = prefs.getString("current_user_id", null)
-                val authToken = prefs.getString("auth_token", "") ?: ""
+                var authToken = prefs.getString("auth_token", "") ?: ""
 
                 if (userId == null) {
                     stopSelf()
@@ -96,13 +96,30 @@ class SyncForegroundService : Service() {
                         )
                     }
 
-                    val response = apiService.uploadPoints("Bearer $authToken", geoRequests)
+                    var response = apiService.uploadPoints("Bearer $authToken", geoRequests)
+                    
+                    if (response.code() == 401) {
+                        Log.d("SyncService", "Token expired, attempting refresh...")
+                        val refreshToken = prefs.getString("refresh_token", "") ?: ""
+                        if (refreshToken.isNotEmpty()) {
+                            val refreshResponse = apiService.refreshToken(feicheiel.technologies.trackme.api.RefreshRequest(refreshToken))
+                            if (refreshResponse.isSuccessful && refreshResponse.body() != null) {
+                                val newAccessToken = refreshResponse.body()!!.access
+                                prefs.edit().putString("auth_token", newAccessToken).apply()
+                                authToken = newAccessToken
+                                Log.d("SyncService", "Token refreshed successfully, retrying batch...")
+                                response = apiService.uploadPoints("Bearer $authToken", geoRequests)
+                            } else {
+                                Log.e("SyncService", "Refresh token failed or expired")
+                            }
+                        }
+                    }
+
                     if (response.isSuccessful) {
                         val syncedBatch = batch.map { it.copy(isSynced = true) }
                         database.locationDao().markAsSynced(syncedBatch)
                     } else {
                         Log.e("SyncService", "Batch upload failed: ${response.code()}")
-                        // Optional: break or retry logic
                     }
                 }
 
@@ -119,7 +136,7 @@ class SyncForegroundService : Service() {
         }
     }
 
-    private fun createNotification(content: String, progress: Int, max: Int, subText: String): Notification {
+    private fun createNotification(content: String, progress: Int, max: Int, subText: String = ""): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Data Sync")
             .setContentText(content)
@@ -130,7 +147,7 @@ class SyncForegroundService : Service() {
             .build()
     }
 
-    private fun updateNotification(content: String, progress: Int, max: Int, subText: String) {
+    private fun updateNotification(content: String, progress: Int, max: Int, subText: String = "") {
         val notification = createNotification(content, progress, max, subText)
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(NOTIFICATION_ID, notification)

@@ -259,7 +259,7 @@ class MainActivity : ComponentActivity() {
         Configuration.getInstance().osmdroidTileCache = File(basePath, "tiles")
         
         // Copy offline map from assets if it exists
-        copyOfflineMapFromAssets("aoi.mbtiles")
+        // copyOfflineMapFromAssets("aoi.mbtiles")
 
         setContent {
             TrackMeTheme {
@@ -359,7 +359,11 @@ fun OSMMapScreen(
     val isServiceRunning by ForeGroundService.isRunning.collectAsState()
     val syncedCount by database.locationDao().getSyncedCountFlow(userId).collectAsState(initial = 0)
     val unsyncedCount by database.locationDao().getUnsyncedCountFlow(userId).collectAsState(initial = 0)
-    val allPoints by database.locationDao().getAllPointsFlow(userId).collectAsState(initial = emptyList())
+    
+    val allPointsFlow = remember(userId) {
+        database.locationDao().getAllPointsFlow(userId)
+    }
+    val allPoints by allPointsFlow.collectAsState(initial = emptyList())
 
     val mapViewInstance = remember { mutableStateOf<MapView?>(null) }
     
@@ -383,7 +387,7 @@ fun OSMMapScreen(
         onDispose { }
     }
 
-    var isDrawTracksEnabled by remember { mutableStateOf(false) }
+    var isDrawTracksEnabled by remember { mutableStateOf(true) }
     var selectedDuration by remember { mutableStateOf("All") }
     var isDurationMenuExpanded by remember { mutableStateOf(false) }
     var isFollowingUser by remember { mutableStateOf(true) }
@@ -395,7 +399,7 @@ fun OSMMapScreen(
                 if (lastLoc != null && location == null) {
                     mapViewInstance.value?.controller?.apply {
                         setCenter(GeoPoint(lastLoc.latitude, lastLoc.longitude))
-                        setZoom(23.0)
+                        setZoom(3.3)
                     }
                 }
             }
@@ -583,6 +587,9 @@ fun OSMMapScreen(
                 view.overlays.removeAll { it is Polyline }
                 if (isDrawTracksEnabled && allPoints.isNotEmpty()) {
                     val now = System.currentTimeMillis()
+                    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                    val todayKey = sdf.format(Date(now))
+                    
                     val filteredPoints = allPoints.filter { 
                         when(selectedDuration) {
                             "Last Hour" -> it.timestamp > now - 3600000
@@ -592,30 +599,24 @@ fun OSMMapScreen(
                     }
 
                     if (filteredPoints.isNotEmpty()) {
-                        val minTs = filteredPoints.minOf { it.timestamp }
-                        val maxTs = filteredPoints.maxOf { it.timestamp }
-                        val tsRange = (maxTs - minTs).coerceAtLeast(1L)
-
-                        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-                        val todayKey = sdf.format(Date(now))
                         val pointsByDay = filteredPoints.groupBy { sdf.format(Date(it.timestamp)) }
 
                         pointsByDay.forEach { (dayKey, dayPoints) ->
-                            // Today is Orange-Red, others are Grey
-                            val dayBaseColor = if (dayKey == todayKey) {
-                                android.graphics.Color.parseColor("#FF4500") // OrangeRed
+                            val isToday = dayKey == todayKey
+                            val dayBaseColor = if (isToday) {
+                                android.graphics.Color.parseColor("#FF4500") // Strong OrangeRed
                             } else {
                                 android.graphics.Color.parseColor("#808080") // Gray
                             }
 
-                            // Split day points into continuous segments where gaps are <= 2 minutes
+                            // Split day points into continuous segments where gaps are <= 1 minute
                             val continuousSegments = mutableListOf<MutableList<LocationEntity>>()
                             if (dayPoints.isNotEmpty()) {
                                 var currentSegment = mutableListOf(dayPoints[0])
                                 continuousSegments.add(currentSegment)
                                 for (i in 1 until dayPoints.size) {
-                                    // 120,000 ms = 2 minutes
-                                    if (dayPoints[i].timestamp - dayPoints[i - 1].timestamp > 120000L) {
+                                    // 60,000 ms = 1 minute gap
+                                    if (dayPoints[i].timestamp - dayPoints[i - 1].timestamp > 60000L) {
                                         currentSegment = mutableListOf(dayPoints[i])
                                         continuousSegments.add(currentSegment)
                                     } else {
@@ -625,25 +626,13 @@ fun OSMMapScreen(
                             }
 
                             continuousSegments.forEach { segment ->
-                                // Draw in chunks to allow for alpha gradient over time
-                                // We cap the chunks per segment to maintain performance
-                                val chunksInSegment = (segment.size / 20).coerceIn(1, 25)
-                                val chunkSize = (segment.size / chunksInSegment).coerceAtLeast(2)
-
-                                segment.windowed(chunkSize, chunkSize - 1, true).forEach { chunk ->
-                                    if (chunk.size >= 2) {
-                                        val avgTs = chunk.map { it.timestamp }.average().toLong()
-                                        val alpha = 0.5f + 0.5f * (avgTs - minTs).toFloat() / tsRange.toFloat()
-                                        
-                                        val polyline = Polyline().apply {
-                                            setPoints(chunk.map { GeoPoint(it.latitude, it.longitude) })
-                                            val alphaInt = (alpha * 255).toInt()
-                                            // Merge day color with dynamic alpha
-                                            outlinePaint.color = (dayBaseColor and 0x00FFFFFF) or (alphaInt shl 24)
-                                            outlinePaint.strokeWidth = 12f
-                                        }
-                                        view.overlays.add(polyline)
+                                if (segment.size >= 2) {
+                                    val polyline = Polyline().apply {
+                                        setPoints(segment.map { GeoPoint(it.latitude, it.longitude) })
+                                        outlinePaint.color = dayBaseColor
+                                        outlinePaint.strokeWidth = 12f
                                     }
+                                    view.overlays.add(polyline)
                                 }
                             }
                         }
@@ -935,7 +924,7 @@ fun OSMMapScreen(
                             Text("Track even when not moving", style = MaterialTheme.typography.bodyMedium)
                             Switch(
                                 checked = trackWhenNotMoving,
-                                onCheckedChange = { 
+                                onCheckedChange = {
                                     trackWhenNotMoving = it
                                     prefs.edit().putBoolean("track_when_not_moving", it).apply()
                                     // Notify service
@@ -946,26 +935,16 @@ fun OSMMapScreen(
                                 }
                             )
                         }
-
+                        Spacer(Modifier.height(13.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Tracks (Live Tracking)", style = MaterialTheme.typography.bodyMedium)
+                            Text("Draw Tracks", style = MaterialTheme.typography.bodyMedium)
                             Switch(
-                                checked = isServiceRunning,
-                                onCheckedChange = { enabled ->
-                                    val intent = Intent(context, ForeGroundService::class.java).apply {
-                                        action = if (enabled) ForeGroundService.Actions.START.toString() 
-                                                 else ForeGroundService.Actions.STOP.toString()
-                                    }
-                                    if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                        context.startForegroundService(intent)
-                                    } else {
-                                        context.startService(intent)
-                                    }
-                                }
+                                checked = isDrawTracksEnabled,
+                                onCheckedChange = { isDrawTracksEnabled = it }
                             )
                         }
 
@@ -1025,8 +1004,9 @@ fun OSMMapScreen(
 suspend fun importCsvFromUri(context: Context, uri: Uri, currentUserId: String): Int {
     return try {
         val database = AppDatabase.getDatabase(context)
-        val existingTimestamps = database.locationDao().getAllTimestamps(currentUserId).toSet()
-        val newPoints = mutableListOf<LocationEntity>()
+        val existingPoints = database.locationDao().getAllPoints(currentUserId).toMutableList()
+        val existingTimestamps = existingPoints.map { it.timestamp }.toSet()
+        val importedPoints = mutableListOf<LocationEntity>()
         
         context.contentResolver.openInputStream(uri)?.use { inputStream ->
             val reader = inputStream.bufferedReader()
@@ -1037,7 +1017,6 @@ suspend fun importCsvFromUri(context: Context, uri: Uri, currentUserId: String):
                 val parts = line.split(",")
                 if (parts.size >= 10) {
                     try {
-                        // ID,UserID,Latitude,Longitude,Timestamp,Speed,Accuracy,DistancePrev,TotalDistance,IsSynced
                         val lat = parts[2].toDouble()
                         val lon = parts[3].toDouble()
                         val tsText = parts[4]
@@ -1048,16 +1027,14 @@ suspend fun importCsvFromUri(context: Context, uri: Uri, currentUserId: String):
                         }
                         
                         if (!existingTimestamps.contains(timestamp)) {
-                            newPoints.add(LocationEntity(
+                            importedPoints.add(LocationEntity(
                                 userId = currentUserId,
                                 latitude = lat,
                                 longitude = lon,
                                 timestamp = timestamp,
                                 speed = parts[5].toFloatOrNull(),
                                 accuracy = parts[6].toFloatOrNull() ?: 0f,
-                                distanceFromPrevious = parts[7].toFloatOrNull() ?: 0f,
-                                totalDistance = parts[8].toFloatOrNull() ?: 0f,
-                                isSynced = false // Set to false so it can be uploaded
+                                isSynced = false
                             ))
                         }
                     } catch (e: Exception) {
@@ -1067,10 +1044,38 @@ suspend fun importCsvFromUri(context: Context, uri: Uri, currentUserId: String):
             }
         }
         
-        if (newPoints.isNotEmpty()) {
-            database.locationDao().insertAll(newPoints)
+        if (importedPoints.isNotEmpty()) {
+            // Sort merged list by timestamp to ensure sequence for distance calculation
+            val allMerged = (existingPoints + importedPoints).sortedBy { it.timestamp }
+            
+            val updatedPoints = mutableListOf<LocationEntity>()
+            var totalDist = 0f
+            var lastPoint: LocationEntity? = null
+            
+            allMerged.forEach { point ->
+                var distFromPrev = 0f
+                if (lastPoint != null) {
+                    val result = FloatArray(1)
+                    android.location.Location.distanceBetween(
+                        lastPoint.latitude, lastPoint.longitude,
+                        point.latitude, point.longitude,
+                        result
+                    )
+                    distFromPrev = result[0]
+                }
+                totalDist += distFromPrev
+                updatedPoints.add(point.copy(
+                    id = 0, // Reset ID to let Room autogenerate after deleteAll
+                    distanceFromPrevious = distFromPrev,
+                    totalDistance = totalDist
+                ))
+                lastPoint = updatedPoints.last()
+            }
+            
+            database.locationDao().deleteAll(currentUserId)
+            database.locationDao().insertAll(updatedPoints)
         }
-        newPoints.size
+        importedPoints.size
     } catch (e: Exception) {
         e.printStackTrace()
         -1

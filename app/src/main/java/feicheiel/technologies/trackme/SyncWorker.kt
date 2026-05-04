@@ -20,7 +20,7 @@ class SyncWorker(appContext: Context, workerParams: WorkerParameters) :
 
         // Retrieve the current user ID. If not found, we cannot sync.
         val userId = prefs.getString("current_user_id", null) ?: return Result.failure()
-        val authToken = prefs.getString("auth_token", "") ?: ""
+        var authToken = prefs.getString("auth_token", "") ?: ""
 
         val unsyncedPoints = database.locationDao().getUnsyncedPoints(userId)
 
@@ -46,7 +46,20 @@ class SyncWorker(appContext: Context, workerParams: WorkerParameters) :
                     )
                 }
 
-                val response = apiService.uploadPoints("Bearer $authToken", geoRequests)
+                var response = apiService.uploadPoints("Bearer $authToken", geoRequests)
+                
+                if (response.code() == 401) {
+                    val refreshToken = prefs.getString("refresh_token", "") ?: ""
+                    if (refreshToken.isNotEmpty()) {
+                        val refreshResponse = apiService.refreshToken(feicheiel.technologies.trackme.api.RefreshRequest(refreshToken))
+                        if (refreshResponse.isSuccessful && refreshResponse.body() != null) {
+                            val newAccessToken = refreshResponse.body()!!.access
+                            prefs.edit().putString("auth_token", newAccessToken).apply()
+                            authToken = newAccessToken
+                            response = apiService.uploadPoints("Bearer $authToken", geoRequests)
+                        }
+                    }
+                }
                 
                 if (response.isSuccessful) {
                     val syncedBatch = batch.map { it.copy(isSynced = true) }

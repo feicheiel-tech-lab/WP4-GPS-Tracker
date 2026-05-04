@@ -3,6 +3,7 @@ package feicheiel.technologies.trackme.api
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.POST
 
 data class RegisterRequest(
@@ -12,7 +13,9 @@ data class RegisterRequest(
 )
 
 data class RegisterResponse(
-    val user_id: String
+    val user_id: String,
+    val access: String? = null,
+    val refresh: String? = null
 )
 
 data class LoginRequest(
@@ -49,5 +52,5 @@ interface AuthApi {
     suspend fun googleLogin(@Body request: GoogleAuthRequest): Response<RegisterResponse>
 
     @GET("api/history/")
-    suspend fun getHistory(): Response<List<LocationRecordResponse>>
+    suspend fun getHistory(@Header("Authorization") authHeader: String): Response<List<LocationRecordResponse>>
 }

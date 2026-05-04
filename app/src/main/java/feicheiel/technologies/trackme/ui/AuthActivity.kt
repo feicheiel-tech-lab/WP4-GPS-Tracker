@@ -31,6 +31,8 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import feicheiel.technologies.trackme.AppDatabase
+import feicheiel.technologies.trackme.LocationEntity
 import feicheiel.technologies.trackme.api.LoginRequest
 import feicheiel.technologies.trackme.api.RegisterRequest
 import feicheiel.technologies.trackme.api.RegisterResponse
@@ -48,7 +50,9 @@ class AuthActivity : ComponentActivity() {
         val sharedPref = getSharedPreferences("auth", Context.MODE_PRIVATE)
         val userPrefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
         
-        if (sharedPref.getString("user_id", null) != null && userPrefs.getString("current_user_id", null) != null) {
+        if (sharedPref.getString("user_id", null) != null && 
+            userPrefs.getString("current_user_id", null) != null &&
+            !userPrefs.getString("auth_token", null).isNullOrBlank()) {
             startActivity(Intent(this, MainActivity::class.java))
             finish()
         }
@@ -75,7 +79,7 @@ fun AuthScreen() {
 
     val retrofit = remember {
         Retrofit.Builder()
-            .baseUrl("http://10.232.1.42:8000/") // Updated to host machine IP
+            .baseUrl("http://192.168.8.118:8000/") // Updated to host machine IP
             .addConverterFactory(GsonConverterFactory.create())
             .build()
     }
@@ -197,9 +201,20 @@ fun AuthScreen() {
                             val userPrefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
                             
                             val userId = when (body) {
-                                is RegisterResponse -> body.user_id
+                                is RegisterResponse -> {
+                                    if (body.access != null && body.refresh != null) {
+                                        userPrefs.edit()
+                                            .putString("auth_token", body.access)
+                                            .putString("refresh_token", body.refresh)
+                                            .apply()
+                                    }
+                                    body.user_id
+                                }
                                 is TokenResponse -> {
-                                    userPrefs.edit().putString("auth_token", body.access).apply()
+                                    userPrefs.edit()
+                                        .putString("auth_token", body.access)
+                                        .putString("refresh_token", body.refresh)
+                                        .apply()
                                     username 
                                 }
                                 else -> "user"
@@ -213,20 +228,21 @@ fun AuthScreen() {
                             // Download History
                             isLoadingHistory = true
                             try {
-                                val historyResponse = api.getHistory()
+                                val authToken = userPrefs.getString("auth_token", "") ?: ""
+                                val historyResponse = api.getHistory("Bearer $authToken")
                                 if (historyResponse.isSuccessful) {
                                     val history = historyResponse.body() ?: emptyList()
                                     val database = AppDatabase.getDatabase(context)
                                     val dao = database.locationDao()
                                     
-                                    val entities = history.map { record ->
+                                    val remoteEntities = history.map { record ->
                                         // Parse Django ISO timestamp
                                         val timestamp = try {
                                             ZonedDateTime.parse(record.timestamp).toInstant().toEpochMilli()
                                         } catch (e: Exception) {
                                             System.currentTimeMillis()
                                         }
-                                        
+
                                         LocationEntity(
                                             userId = userId,
                                             latitude = record.latitude,
@@ -238,12 +254,40 @@ fun AuthScreen() {
                                         )
                                     }
                                     
-                                    // Filter out points we already have (by timestamp)
-                                    val existingPoints = dao.getAllPoints(userId)
-                                    val existingTimestamps = existingPoints.map { it.timestamp }.toSet()
-                                    val newEntities = entities.filter { it.timestamp !in existingTimestamps }
-                                    
-                                    newEntities.forEach { dao.insert(it) }
+                                    val localPoints = dao.getAllPoints(userId)
+                                    val localTimestamps = localPoints.map { it.timestamp }.toSet()
+                                    val newFromRemote = remoteEntities.filter { it.timestamp !in localTimestamps }
+
+                                    if (newFromRemote.isNotEmpty()) {
+                                        val allMerged = (localPoints + newFromRemote).sortedBy { it.timestamp }
+                                        
+                                        val updatedPoints = mutableListOf<LocationEntity>()
+                                        var totalDist = 0f
+                                        var lastPoint: LocationEntity? = null
+                                        
+                                        allMerged.forEach { point ->
+                                            var distFromPrev = 0f
+                                            if (lastPoint != null) {
+                                                val result = FloatArray(1)
+                                                android.location.Location.distanceBetween(
+                                                    lastPoint.latitude, lastPoint.longitude,
+                                                    point.latitude, point.longitude,
+                                                    result
+                                                )
+                                                distFromPrev = result[0]
+                                            }
+                                            totalDist += distFromPrev
+                                            updatedPoints.add(point.copy(
+                                                id = 0, // Reset for re-insertion
+                                                distanceFromPrevious = distFromPrev,
+                                                totalDistance = totalDist
+                                            ))
+                                            lastPoint = updatedPoints.last()
+                                        }
+                                        
+                                        dao.deleteAll(userId)
+                                        dao.insertAll(updatedPoints)
+                                    }
                                 }
                             } catch (e: Exception) {
                                 e.printStackTrace()
