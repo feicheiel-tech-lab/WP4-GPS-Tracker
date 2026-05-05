@@ -75,6 +75,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.android.gms.location.LocationServices
 import org.osmdroid.config.Configuration
@@ -620,6 +621,21 @@ fun OSMMapScreen(
         pendingAddKeys.value = newlyCreatedKeys
     }
 
+    // Panel stats — derived from allPoints but memoised so Compose only
+    // recomposes the panel when the *output* actually changes, not on every
+    // raw Flow emission that leaves these values identical.
+    val totalDistanceKm by remember {
+        derivedStateOf { (allPoints.lastOrNull()?.totalDistance ?: 0f) / 1000f }
+    }
+    val totalPoints by remember {
+        derivedStateOf { allPoints.size }
+    }
+    val uniqueDays by remember {
+        derivedStateOf {
+            allPoints.map { sdf.format(Date(it.timestamp)) }.distinct().size
+        }
+    }
+
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
     ModalNavigationDrawer(
@@ -996,20 +1012,13 @@ fun OSMMapScreen(
                                                     fontWeight = FontWeight.Bold,
                                                     color = vibrantBlue
                                                 )
-                                            ) { append("${allPoints.size}") }
+                                            ) { append("$totalPoints") }
                                         },
                                         style = MaterialTheme.typography.bodyLarge.copy(fontFamily = sourceSans)
                                     )
                                 }
 
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    val lastPoint = allPoints.lastOrNull()
-                                    val dist = lastPoint?.totalDistance?.div(1000) ?: 0f
-
-                                    // Calculate unique days travelled
-                                    val uniqueDays = allPoints.map {
-                                        sdf.format(Date(it.timestamp))
-                                    }.distinct().size
 
                                     Surface(
                                         color = Color(0xFFD5E5F3),
@@ -1017,7 +1026,7 @@ fun OSMMapScreen(
                                         modifier = Modifier.padding(bottom = 4.dp)
                                     ) {
                                         Text(
-                                            text = String.format("%.2f km", dist),
+                                            text = String.format("%.2f km", totalDistanceKm),
                                             modifier = Modifier.padding(
                                                 horizontal = 16.dp,
                                                 vertical = 6.dp
@@ -1284,3 +1293,4 @@ fun LocationGlowIndicator(status: ForeGroundService.Status) {
 fun AppPreview() {
     LocationGlowIndicator(ForeGroundService.Status.ACTIVE)
 }
+

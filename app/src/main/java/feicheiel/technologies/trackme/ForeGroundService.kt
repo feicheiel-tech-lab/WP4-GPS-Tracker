@@ -43,6 +43,13 @@ class ForeGroundService: Service() {
     private lateinit var builder: NotificationCompat.Builder
     private var wakeLock: PowerManager.WakeLock? = null
 
+    // Dedicated background thread for GPS callbacks.
+    // Registering the LocationCallback on this Looper instead of Looper.getMainLooper()
+    // means every onLocationResult() invocation — spike filtering, Kalman, DB writes —
+    // runs entirely off the UI thread, keeping the main thread free for rendering.
+    private val locationHandlerThread = android.os.HandlerThread("LocationCallbackThread").also { it.start() }
+    private val locationLooper get() = locationHandlerThread.looper
+
     private var isServiceStarted = false
     private lateinit var fusedLocationProviderClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
@@ -208,6 +215,7 @@ class ForeGroundService: Service() {
         stopLocationUpdates()
         releaseWakeLock()
         serviceScope.cancel()
+        locationHandlerThread.quitSafely() // release the background thread cleanly
     }
 
     override fun onBind(p0: Intent?): IBinder? {
@@ -267,7 +275,7 @@ class ForeGroundService: Service() {
         fusedLocationProviderClient.requestLocationUpdates(
             locationRequest,
             locationCallback,
-            Looper.getMainLooper()
+            locationLooper  // GPS callbacks run on background thread, not the UI thread
         )
     }
 
