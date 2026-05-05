@@ -47,9 +47,16 @@ class ForeGroundService: Service() {
     private lateinit var fusedLocationProviderClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
 
-    // Median Filter Window: 30 seconds
-    private val windowSizeMillis = 30000L
-    private val locationHistory = mutableListOf<Location>()
+    // Spike Filter: per-point rejection against the last accepted point.
+    // A point is rejected if its implied speed exceeds MAX_SPEED_MS *and* its
+    // accuracy is worse than MIN_ACCURACY_M (weak GPS signal + large jump = spike).
+    // After MAX_CONSECUTIVE_REJECTIONS in a row we accept anyway — the user may
+    // have genuinely moved fast or the GPS recovered to a new position.
+    private val MAX_SPEED_MS = 55f          // ~200 km/h — anything faster is a spike
+    private val MIN_ACCURACY_M = 30f        // only reject when accuracy is also poor
+    private val MAX_CONSECUTIVE_REJECTIONS = 5
+    private var lastAcceptedLocation: Location? = null
+    private var consecutiveRejections = 0
 
     // Kalman Filter
     private var kalmanLat: KalmanFilter? = null
@@ -98,46 +105,55 @@ class ForeGroundService: Service() {
         fusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(this)
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(locationResult: LocationResult) {
-                locationResult.lastLocation?.let{ freshLocation ->
-                    // 1. Maintain the time window
+                locationResult.lastLocation?.let { freshLocation ->
                     val now = System.currentTimeMillis()
-                    locationHistory.add(freshLocation)
-                    locationHistory.removeAll { now - it.time > windowSizeMillis }
 
-                    // 2. Compute Median if we have enough points
-                    var filteredLocation = if (locationHistory.size >= 3) {
-                        applyMedianFilter(locationHistory)
-                    } else {
-                        freshLocation
+                    // 1. Spike filter: reject GPS jumps that are physically implausible.
+                    //    We compare the incoming point against the last *accepted* point
+                    //    using both implied speed and the GPS accuracy report.
+                    val isSpike = isSpikeReading(freshLocation)
+                    if (isSpike) {
+                        consecutiveRejections++
+                        if (consecutiveRejections < MAX_CONSECUTIVE_REJECTIONS) {
+                            // Still within the rejection cap — discard this reading entirely.
+                            // We still update the UI status so the indicator stays live.
+                            status = Status.ACTIVE
+                            return@let
+                        }
+                        // Rejection cap reached: accept despite the spike so the track
+                        // doesn't freeze if the user genuinely relocated (e.g. tunnel exit).
                     }
+                    // Point accepted — reset the rejection counter.
+                    consecutiveRejections = 0
+                    lastAcceptedLocation = freshLocation
 
-                    // 3. Apply Kalman Filter for additional smoothing
+                    // 2. Apply Kalman Filter for smoothing accepted points.
                     if (kalmanLat == null) {
-                        kalmanLat = KalmanFilter(3f) // 3m process noise
+                        kalmanLat = KalmanFilter(3f)
                         kalmanLon = KalmanFilter(3f)
                     }
-                    
-                    val accuracy = if (filteredLocation.hasAccuracy()) filteredLocation.accuracy else 25f
-                    val kLat = kalmanLat!!.filter(filteredLocation.latitude, accuracy, filteredLocation.time)
-                    val kLon = kalmanLon!!.filter(filteredLocation.longitude, accuracy, filteredLocation.time)
 
-                    filteredLocation = Location(filteredLocation).apply {
+                    val accuracy = if (freshLocation.hasAccuracy()) freshLocation.accuracy else 25f
+                    val kLat = kalmanLat!!.filter(freshLocation.latitude, accuracy, freshLocation.time)
+                    val kLon = kalmanLon!!.filter(freshLocation.longitude, accuracy, freshLocation.time)
+
+                    val filteredLocation = Location(freshLocation).apply {
                         latitude = kLat
                         longitude = kLon
                     }
 
                     _currentLocation.value = filteredLocation
                     status = Status.ACTIVE
-                    
-                    // Throttle geocoder to once every 30 seconds to save resources
+
+                    // Throttle geocoder to once every 30 seconds to save resources.
                     if (now - lastGeocoderTime > 30000L) {
                         lastGeocoderTime = now
                         updateCityFromLocation(filteredLocation.latitude, filteredLocation.longitude)
                     }
 
-                    // 4. Check movement and save
+                    // 3. Check movement and save.
                     val isMoving = if (filteredLocation.hasSpeed()) filteredLocation.speed > 0.6f else true
-                    
+
                     if ((isMoving || trackWhenNotMoving) && currentUserId != null) {
                         serviceScope.launch {
                             val lastPoint = database.locationDao().getLastPoint(currentUserId!!)
@@ -167,8 +183,8 @@ class ForeGroundService: Service() {
                                 isSynced = false
                             )
                             database.locationDao().insert(entity)
-                            
-                            // Update statistics in notification
+
+                            // Update statistics in notification.
                             val allPoints = database.locationDao().getAllPoints(currentUserId!!)
                             updateStatsUI(newTotalDistance, allPoints.size)
                         }
@@ -323,7 +339,7 @@ class ForeGroundService: Service() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-        
+
         updateStatusUI() // Ensure initial status (Searching/Orange) is applied
         updateNotificationUI()
         startForeground(NOTIFICATION_ID, builder.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
@@ -364,7 +380,7 @@ class ForeGroundService: Service() {
 
         val distanceKm = totalDistance / 1000f
         val statsText = String.format("%.2f km | %d pts", distanceKm, pointsCount)
-        
+
         remoteViews.setTextViewText(R.id.txt_ntf_stats, statsText)
 
         // Check for unsynced points to show sync button
@@ -378,9 +394,9 @@ class ForeGroundService: Service() {
                     action = Actions.SYNC.toString()
                 }
                 val syncPendingIntent = PendingIntent.getService(
-                    this@ForeGroundService, 
-                    1, 
-                    syncIntent, 
+                    this@ForeGroundService,
+                    1,
+                    syncIntent,
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                 )
                 remoteViews.setViewVisibility(R.id.btn_ntf_sync, android.view.View.VISIBLE)
@@ -428,18 +444,42 @@ class ForeGroundService: Service() {
         }
     }
 
-    private fun applyMedianFilter(history: List<Location>): Location {
-        val sortedLat = history.map { it.latitude }.sorted()
-        val sortedLon = history.map { it.longitude }.sorted()
-        
-        val medianLat = sortedLat[sortedLat.size / 2]
-        val medianLon = sortedLon[sortedLon.size / 2]
-        
-        // Return a copy of the latest location with median coords
-        return Location(history.last()).apply {
-            latitude = medianLat
-            longitude = medianLon
-        }
+    /**
+     * Returns true if [incoming] is a GPS spike and should be rejected.
+     *
+     * A reading is considered a spike when ALL of the following are true:
+     *   1. We have a previous accepted point to compare against.
+     *   2. The implied speed from the last accepted point to this one exceeds
+     *      MAX_SPEED_MS (~200 km/h) — physically implausible for a pedestrian
+     *      or normal vehicle track.
+     *   3. The GPS accuracy is worse than MIN_ACCURACY_M (30 m) — a confident
+     *      GPS fix that reports high speed is likely real (e.g. a fast vehicle),
+     *      so we only reject when the hardware itself signals uncertainty.
+     *
+     * If MAX_CONSECUTIVE_REJECTIONS is reached the caller accepts anyway to
+     * prevent the track from freezing after a tunnel, building, or signal loss.
+     */
+    private fun isSpikeReading(incoming: Location): Boolean {
+        val prev = lastAcceptedLocation ?: return false  // no baseline yet — always accept
+
+        val timeDeltaSeconds = (incoming.time - prev.time) / 1000.0
+        if (timeDeltaSeconds <= 0) return false          // clock anomaly — accept safely
+
+        // Compute straight-line distance between previous accepted point and this one.
+        val distanceResult = FloatArray(1)
+        Location.distanceBetween(
+            prev.latitude, prev.longitude,
+            incoming.latitude, incoming.longitude,
+            distanceResult
+        )
+        val distanceMetres = distanceResult[0]
+
+        // Implied speed in m/s.
+        val impliedSpeed = distanceMetres / timeDeltaSeconds
+
+        // Reject only when speed is implausible AND the GPS itself is uncertain.
+        val accuracyPoor = !incoming.hasAccuracy() || incoming.accuracy > MIN_ACCURACY_M
+        return impliedSpeed > MAX_SPEED_MS && accuracyPoor
     }
 
     /**

@@ -13,6 +13,7 @@ import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -71,6 +72,8 @@ import feicheiel.technologies.trackme.ui.theme.PROJECT_Red
 import feicheiel.technologies.trackme.ui.theme.PROJECT_Yellow
 import feicheiel.technologies.trackme.ui.theme.TrackMeTheme
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.android.gms.location.LocationServices
@@ -159,7 +162,7 @@ class MainActivity : ComponentActivity() {
                 val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
                 val userId = prefs.getString("current_user_id", "default_user") ?: "default_user"
                 val points = database.locationDao().getAllPoints(userId)
-                
+
                 if (writeCsvToUri(this@MainActivity, it, points)) {
                     Toast.makeText(this@MainActivity, "Export successful", Toast.LENGTH_SHORT).show()
                     if (isLoggingOut) {
@@ -185,14 +188,14 @@ class MainActivity : ComponentActivity() {
             val database = AppDatabase.getDatabase(this@MainActivity)
             val prefs = getSharedPreferences("user_prefs", MODE_PRIVATE)
             val userId = prefs.getString("current_user_id", "default_user") ?: "default_user"
-            
+
             val unsyncedCount = database.locationDao().getUnsyncedCount(userId)
             if (unsyncedCount > 0) {
                 Toast.makeText(this@MainActivity, "Syncing $unsyncedCount unsynced points...", Toast.LENGTH_SHORT).show()
                 val workRequest = OneTimeWorkRequestBuilder<SyncWorker>().build()
                 WorkManager.getInstance(this@MainActivity).enqueue(workRequest)
             }
-            
+
             isLoggingOut = true
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
             createDocumentLauncher.launch("trackme_export_${userId}_$timestamp.csv")
@@ -230,7 +233,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // Force a solid black status bar so white notification text is always readable
+        // regardless of the map tile colour underneath.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK)
+        )
 
         val sharedPref = getSharedPreferences("auth", Context.MODE_PRIVATE)
         val userPrefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
@@ -252,12 +259,12 @@ class MainActivity : ComponentActivity() {
         Configuration.getInstance().userAgentValue = packageName
         val osmConfig = getSharedPreferences("osm", MODE_PRIVATE)
         Configuration.getInstance().load(this, osmConfig)
-        
+
         // Use app-specific files directory for osmdroid to avoid permission issues on Android 13+
         val basePath = File(getExternalFilesDir(null), "osmdroid")
         Configuration.getInstance().osmdroidBasePath = basePath
         Configuration.getInstance().osmdroidTileCache = File(basePath, "tiles")
-        
+
         // Copy offline map from assets if it exists
         // copyOfflineMapFromAssets("aoi.mbtiles")
 
@@ -343,14 +350,14 @@ fun OSMMapScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val database = remember { AppDatabase.getDatabase(context) }
-    
+
     val workManager = remember { WorkManager.getInstance(context) }
     val syncWorkInfo by workManager.getWorkInfosByTagFlow("sync_tag").collectAsStateWithLifecycle(initialValue = emptyList())
     val isSyncing = syncWorkInfo.any { it.state == androidx.work.WorkInfo.State.RUNNING || it.state == androidx.work.WorkInfo.State.ENQUEUED }
-    
+
     // Attempt to get last known location for initial center
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
-    
+
     val prefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
     val userId = prefs.getString("current_user_id", "default_user") ?: "default_user"
 
@@ -359,24 +366,24 @@ fun OSMMapScreen(
     val isServiceRunning by ForeGroundService.isRunning.collectAsState()
     val syncedCount by database.locationDao().getSyncedCountFlow(userId).collectAsState(initial = 0)
     val unsyncedCount by database.locationDao().getUnsyncedCountFlow(userId).collectAsState(initial = 0)
-    
+
     val allPointsFlow = remember(userId) {
         database.locationDao().getAllPointsFlow(userId)
     }
     val allPoints by allPointsFlow.collectAsState(initial = emptyList())
 
     val mapViewInstance = remember { mutableStateOf<MapView?>(null) }
-    
+
     // We use a single ComposeView for the indicator and keep it alive to preserve animations.
     val compositionContext = rememberCompositionContext()
-    val indicatorComposeView = remember { 
+    val indicatorComposeView = remember {
         ComposeView(context).apply {
             setParentCompositionContext(compositionContext)
         }
     }
     // State to track status for the indicator without re-triggering setContent
     val currentStatusState = remember { mutableStateOf(ForeGroundService.Status.SEARCHING) }
-    
+
     // Initialize the indicator content
     DisposableEffect(indicatorComposeView) {
         indicatorComposeView.setContent {
@@ -389,9 +396,10 @@ fun OSMMapScreen(
 
     var isDrawTracksEnabled by remember { mutableStateOf(true) }
     var selectedDuration by remember { mutableStateOf("All") }
+    val sdf = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
     var isDurationMenuExpanded by remember { mutableStateOf(false) }
     var isFollowingUser by remember { mutableStateOf(true) }
-    
+
     // Initial map centering
     LaunchedEffect(Unit) {
         try {
@@ -407,14 +415,14 @@ fun OSMMapScreen(
             e.printStackTrace()
         }
     }
-    
+
     var isPanelExpanded by remember { mutableStateOf(false) }
     val configuration = LocalConfiguration.current
     val haptic = LocalHapticFeedback.current
     val screenHeight = configuration.screenHeightDp.dp
     val expandedHeight = screenHeight * 0.37f
     val collapsedHeight = 43.dp // Very compact collapsed state
-    
+
     val panelHeight by animateDpAsState(
         targetValue = if (isPanelExpanded) expandedHeight else collapsedHeight,
         label = "panelHeight"
@@ -440,66 +448,180 @@ fun OSMMapScreen(
     // Use default OSM tiles for clarity
     val mapTileSource = TileSourceFactory.MAPNIK
 
-    // 1. Memoize track polylines to prevent thousands of allocations per second
-    val trackOverlays = remember(allPoints, isDrawTracksEnabled, selectedDuration) {
-        val polylines = mutableListOf<Polyline>()
-        if (isDrawTracksEnabled && allPoints.isNotEmpty()) {
+    // 1. Persistent polyline cache: segmentKey -> Polyline, survives recompositions.
+    //    Key format: "<dayKey>:<segmentIndex>" e.g. "2025-01-15:0", "2025-01-15:1"
+    //    Only the last segment of today can grow; all others are sealed.
+    data class SegmentState(val polyline: Polyline, val pointCount: Int)
+    val polylineCache = remember { mutableMapOf<String, SegmentState>() }
+    // Tracks which keys were already added to the MapView.
+    val overlaysOnMap = remember { mutableSetOf<String>() }
+    // New segment keys to be added to the MapView in the next AndroidView update pass.
+    val pendingAddKeys = remember { mutableStateOf<List<String>>(emptyList()) }
+
+    LaunchedEffect(allPoints, isDrawTracksEnabled, selectedDuration) {
+        if (!isDrawTracksEnabled || allPoints.isEmpty()) {
+            polylineCache.clear()
+            overlaysOnMap.clear()
+            pendingAddKeys.value = emptyList()
+            return@LaunchedEffect
+        }
+
+        // --- BACKGROUND: pure data work, no View or Polyline mutations ---
+        // Snapshot values that the background thread will read, so they can't
+        // change mid-computation if the composable recomposes while we're off-thread.
+        val pointsSnapshot = allPoints
+        val durationSnapshot = selectedDuration
+
+        data class SegmentUpdate(
+            val segKey: String,
+            val dayKey: String,
+            val color: Int,
+            val geoPoints: List<GeoPoint>,    // full point list for new segments
+            val appendPoints: List<GeoPoint>, // only new tail points for active segment
+            val totalCount: Int,
+            val isNew: Boolean,               // true = create new Polyline; false = append
+            val isToday: Boolean              // today's track draws on top; past gets 0.5 alpha
+        )
+
+        val updates: List<SegmentUpdate> = withContext(Dispatchers.Default) {
             val now = System.currentTimeMillis()
-            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
             val todayKey = sdf.format(Date(now))
-            
-            val filteredPoints = allPoints.filter { 
-                when(selectedDuration) {
+
+            val filteredPoints = pointsSnapshot.filter {
+                when (durationSnapshot) {
                     "Last Hour" -> it.timestamp > now - 3600000
-                    "Last 24h" -> it.timestamp > now - 86400000
-                    else -> true
+                    "Last 24h"  -> it.timestamp > now - 86400000
+                    else        -> true
                 }
             }
 
-            if (filteredPoints.isNotEmpty()) {
-                val pointsByDay = filteredPoints.groupBy { sdf.format(Date(it.timestamp)) }
+            if (filteredPoints.isEmpty()) return@withContext emptyList()
 
-                pointsByDay.forEach { (dayKey, dayPoints) ->
-                    val isToday = dayKey == todayKey
-                    val dayBaseColor = if (isToday) {
-                        android.graphics.Color.parseColor("#FF4500") // Strong OrangeRed
-                    } else {
-                        android.graphics.Color.parseColor("#808080") // Gray
-                    }
+            val pointsByDay = filteredPoints.groupBy { sdf.format(Date(it.timestamp)) }
+            val result = mutableListOf<SegmentUpdate>()
 
-                    // Split day points into continuous segments where gaps are <= 1 minute
-                    val continuousSegments = mutableListOf<MutableList<LocationEntity>>()
-                    if (dayPoints.isNotEmpty()) {
-                        var currentSegment = mutableListOf(dayPoints[0])
-                        continuousSegments.add(currentSegment)
-                        for (i in 1 until dayPoints.size) {
-                            if (dayPoints[i].timestamp - dayPoints[i - 1].timestamp > 60000L) {
-                                currentSegment = mutableListOf(dayPoints[i])
-                                continuousSegments.add(currentSegment)
-                            } else {
-                                currentSegment.add(dayPoints[i])
-                            }
-                        }
-                    }
+            pointsByDay.forEach { (dayKey, dayPoints) ->
+                val isToday = dayKey == todayKey
+                val color = if (isToday)
+                    android.graphics.Color.parseColor("#FF4500")
+                else
+                    android.graphics.Color.parseColor("#89C9F7")
 
-                    continuousSegments.forEach { segment ->
-                        if (segment.size >= 2) {
-                            val polyline = Polyline().apply {
-                                setPoints(segment.map { GeoPoint(it.latitude, it.longitude) })
-                                outlinePaint.color = dayBaseColor
-                                outlinePaint.strokeWidth = 12f
-                            }
-                            polylines.add(polyline)
+                // Build continuous segments (gap > 1 min → new segment).
+                val continuousSegments = mutableListOf<MutableList<LocationEntity>>()
+                if (dayPoints.isNotEmpty()) {
+                    var current = mutableListOf(dayPoints[0])
+                    continuousSegments.add(current)
+                    for (i in 1 until dayPoints.size) {
+                        if (dayPoints[i].timestamp - dayPoints[i - 1].timestamp > 60_000L) {
+                            current = mutableListOf(dayPoints[i])
+                            continuousSegments.add(current)
+                        } else {
+                            current.add(dayPoints[i])
                         }
                     }
                 }
+
+                continuousSegments.forEachIndexed { segIndex, segment ->
+                    if (segment.size < 2) return@forEachIndexed
+                    val segKey = "$dayKey:$segIndex"
+                    val isActiveSegment = isToday && segIndex == continuousSegments.lastIndex
+                    // Read pointCount from cache — safe here because only Main thread writes it.
+                    val cachedCount = polylineCache[segKey]?.pointCount ?: 0
+
+                    when {
+                        cachedCount == 0 -> {
+                            // New segment: pre-build the full GeoPoint list off-thread.
+                            result.add(SegmentUpdate(
+                                segKey       = segKey,
+                                dayKey       = dayKey,
+                                color        = color,
+                                geoPoints    = segment.map { GeoPoint(it.latitude, it.longitude) },
+                                appendPoints = emptyList(),
+                                totalCount   = segment.size,
+                                isNew        = true,
+                                isToday      = isToday
+                            ))
+                        }
+                        isActiveSegment && segment.size > cachedCount -> {
+                            // Active segment grew: pre-build only the new tail off-thread.
+                            result.add(SegmentUpdate(
+                                segKey       = segKey,
+                                dayKey       = dayKey,
+                                color        = color,
+                                geoPoints    = emptyList(),
+                                appendPoints = segment.drop(cachedCount)
+                                    .map { GeoPoint(it.latitude, it.longitude) },
+                                totalCount   = segment.size,
+                                isNew        = false,
+                                isToday      = isToday
+                            ))
+                        }
+                        // Sealed segment, nothing changed — skip.
+                    }
+                }
+            }
+            result
+        }
+        // --- MAIN THREAD: apply computed updates to Polyline objects and cache ---
+
+        if (updates.isEmpty()) {
+            // Filter may have narrowed to nothing — clear stale state.
+            polylineCache.clear()
+            overlaysOnMap.clear()
+            pendingAddKeys.value = emptyList()
+            return@LaunchedEffect
+        }
+
+        // Drop cached keys whose day fell outside the filter window.
+        val validDayKeys = updates.map { it.dayKey }.toSet()
+        polylineCache.keys.filter { it.substringBefore(":") !in validDayKeys }.forEach { key ->
+            polylineCache.remove(key)
+            overlaysOnMap.remove(key)
+        }
+
+        val newlyCreatedKeys = mutableListOf<String>()
+
+        // Process new-segment updates sorted oldest-day-first so that when they
+        // are added to the MapView overlay list, past tracks sit underneath and
+        // today's track renders on top (last added = highest z-order in OSMDroid).
+        val sortedUpdates = updates.sortedWith(compareBy({ it.isToday }, { it.segKey }))
+
+        sortedUpdates.forEach { update ->
+            if (update.isNew) {
+                // Past-day tracks get 0.5 alpha (128/255) so today's track pops visually.
+                val paintColor = if (update.isToday) {
+                    update.color
+                } else {
+                    android.graphics.Color.argb(
+                        128,
+                        android.graphics.Color.red(update.color),
+                        android.graphics.Color.green(update.color),
+                        android.graphics.Color.blue(update.color)
+                    )
+                }
+                // GeoPoints already built off-thread — just wire up the Polyline.
+                val polyline = Polyline().apply {
+                    setPoints(update.geoPoints)
+                    outlinePaint.color = paintColor
+                    outlinePaint.strokeWidth = 12f
+                }
+                polylineCache[update.segKey] = SegmentState(polyline, update.totalCount)
+                newlyCreatedKeys.add(update.segKey)
+            } else {
+                // Tail GeoPoints already built off-thread — append and update count.
+                val existing = polylineCache[update.segKey] ?: return@forEach
+                existing.polyline.setPoints(existing.polyline.actualPoints + update.appendPoints)
+                polylineCache[update.segKey] = existing.copy(pointCount = update.totalCount)
+                // Already on the map; setPoints triggers its own redraw.
             }
         }
-        polylines
+
+        pendingAddKeys.value = newlyCreatedKeys
     }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = false,
@@ -585,402 +707,410 @@ fun OSMMapScreen(
         Box(modifier = modifier.fillMaxSize()) {
             AndroidView(
                 factory = { ctx ->
-                MapView(ctx).apply {
-                    setTileSource(mapTileSource)
-                    setMultiTouchControls(true)
-                    setUseDataConnection(true)
-                    controller.setZoom(23.0)
-                    mapViewInstance.value = this
+                    MapView(ctx).apply {
+                        setTileSource(mapTileSource)
+                        setMultiTouchControls(true)
+                        setUseDataConnection(true)
+                        controller.setZoom(23.0)
+                        mapViewInstance.value = this
 
-                    clipChildren = false
-                    clipToPadding = false
+                        clipChildren = false
+                        clipToPadding = false
 
-                    val rotationGestureOverlay = RotationGestureOverlay(this)
-                    rotationGestureOverlay.isEnabled = true
-                    overlays.add(rotationGestureOverlay)
+                        val rotationGestureOverlay = RotationGestureOverlay(this)
+                        rotationGestureOverlay.isEnabled = true
+                        overlays.add(rotationGestureOverlay)
 
-                    val copyrightOverlay = CopyrightOverlay(ctx).apply {
-                        setCopyrightNotice("© OpenStreetMap contributors")
-                    }
-                    overlays.add(copyrightOverlay)
-
-                    setOnTouchListener { _, event ->
-                        if (event.action == MotionEvent.ACTION_DOWN) {
-                            isFollowingUser = false
+                        val copyrightOverlay = CopyrightOverlay(ctx).apply {
+                            setCopyrightNotice("© OpenStreetMap contributors")
                         }
-                        false
-                    }
-                }
-            },
-            update = { view ->
-                currentStatusState.value = status
-                
-                location?.let {
-                    val userPoint = GeoPoint(it.latitude, it.longitude)
-                    
-                    if (indicatorComposeView.parent == null) {
-                        val lp = MapView.LayoutParams(
-                            MapView.LayoutParams.WRAP_CONTENT,
-                            MapView.LayoutParams.WRAP_CONTENT,
-                            userPoint,
-                            MapView.LayoutParams.CENTER,
-                            0, 0
-                        )
-                        view.addView(indicatorComposeView, lp)
-                        
-                        // Center and zoom on first location reception
-                        view.controller.setCenter(userPoint)
-                        view.controller.setZoom(23.0)
-                    } else {
-                        val lp = indicatorComposeView.layoutParams as MapView.LayoutParams
-                        lp.geoPoint = userPoint
-                        view.updateViewLayout(indicatorComposeView, lp)
-                    }
+                        overlays.add(copyrightOverlay)
 
-                    if (isFollowingUser){
-                        view.controller.animateTo(userPoint)
-                    }
-                }
-
-                // 2. Optimized Overlay Update: Only swap polylines if the cached list changed
-                val existingPolylines = view.overlays.filterIsInstance<Polyline>()
-                if (existingPolylines.size != trackOverlays.size || 
-                    (trackOverlays.isNotEmpty() && existingPolylines.firstOrNull() != trackOverlays.firstOrNull())) {
-                    view.overlays.removeAll { it is Polyline }
-                    view.overlays.addAll(trackOverlays)
-                    view.invalidate()
-                }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
-
-        // Menu Button (Top Left)
-        IconButton(
-            onClick = { scope.launch { drawerState.open() } },
-            modifier = Modifier
-                .padding(top = 48.dp, start = 16.dp)
-                .size(48.dp)
-                .background(Color.White.copy(alpha = 0.9f), CircleShape)
-                .align(Alignment.TopStart)
-        ) {
-            Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.Black)
-        }
-
-        // SYNC STATUS & BUTTON OVERLAY
-        val syncColor = if (unsyncedCount > 0) Color(0xFFFFD355) else Color(0xFF509FB7)
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 48.dp, end = 20.dp)
-                .shadow(
-                    elevation = 48.dp,
-                    shape = RoundedCornerShape(24.dp),
-                    spotColor = syncColor,
-                    ambientColor = syncColor
-                )
-                .border(0.3.dp, syncColor.copy(alpha = 0.5f), RoundedCornerShape(24.dp)),
-            color = Color.White,
-            shape = RoundedCornerShape(24.dp)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                androidx.compose.material3.IconButton(
-                    onClick = { 
-                        scope.launch {
-                            val intent = Intent(context, SyncForegroundService::class.java).apply {
-                                action = SyncForegroundService.ACTION_START_SYNC
+                        setOnTouchListener { _, event ->
+                            if (event.action == MotionEvent.ACTION_DOWN) {
+                                isFollowingUser = false
                             }
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                context.startForegroundService(intent)
-                            } else {
-                                context.startService(intent)
-                            }
+                            false
                         }
                     }
-                ) {
-                    if (isSyncing) {
-                        androidx.compose.material3.CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    } else {
-                        Icon(
-                            Icons.Rounded.CloudSync, 
-                            contentDescription = "Sync",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+                },
+                update = { view ->
+                    currentStatusState.value = status
+
+                    location?.let {
+                        val userPoint = GeoPoint(it.latitude, it.longitude)
+
+                        if (indicatorComposeView.parent == null) {
+                            val lp = MapView.LayoutParams(
+                                MapView.LayoutParams.WRAP_CONTENT,
+                                MapView.LayoutParams.WRAP_CONTENT,
+                                userPoint,
+                                MapView.LayoutParams.CENTER,
+                                0, 0
+                            )
+                            view.addView(indicatorComposeView, lp)
+
+                            // Center and zoom on first location reception
+                            view.controller.setCenter(userPoint)
+                            view.controller.setZoom(23.0)
+                        } else {
+                            val lp = indicatorComposeView.layoutParams as MapView.LayoutParams
+                            lp.geoPoint = userPoint
+                            view.updateViewLayout(indicatorComposeView, lp)
+                        }
+
+                        if (isFollowingUser){
+                            view.controller.animateTo(userPoint)
+                        }
                     }
-                }
-                
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(24.dp)
-                        .background(Color.LightGray.copy(alpha = 0.5f))
-                )
-                
-                Spacer(Modifier.width(12.dp))
-                
-                Box(
-                    modifier = Modifier
-                        .size(14.dp)
-                        .background(syncColor, CircleShape)
-                        .border(2.dp, Color.White, CircleShape)
-                )
-                
-                Spacer(Modifier.width(12.dp))
-            }
-        }
 
-        FloatingActionButton(
-            onClick = { 
-                isFollowingUser = true 
-                mapViewInstance.value?.let { 
-                    it.mapOrientation = 0f
-                }
-            },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(bottom = fabPadding, end = 20.dp)
-                .shadow(
-                    elevation = 57.dp,
-                    shape = RoundedCornerShape(27.dp),
-                    spotColor = syncColor,
-                    ambientColor = syncColor
-                ),
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.primary
-        ) {
-            Icon(Icons.Rounded.MyLocation, contentDescription = "Recenter")
-        }
+                    // 2. Incremental overlay update: only add brand-new segments; never remove/re-add.
+                    //    Active segment appends are handled by setPoints() in the LaunchedEffect above,
+                    //    which triggers its own redraw — no MapView.invalidate() needed for those.
+                    val keysToAdd = pendingAddKeys.value
+                    if (keysToAdd.isNotEmpty()) {
+                        keysToAdd.forEach { key ->
+                            polylineCache[key]?.polyline?.let { view.overlays.add(it) }
+                            overlaysOnMap.add(key)
+                        }
+                        pendingAddKeys.value = emptyList()
+                        view.invalidate()
+                    }
+                    // If tracks were toggled off or filter changed, clear all polyline overlays.
+                    if (!isDrawTracksEnabled || polylineCache.isEmpty()) {
+                        if (view.overlays.removeAll { it is Polyline }) {
+                            overlaysOnMap.clear()
+                            view.invalidate()
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
 
-        Surface(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(panelHeight)
-                .shadow(
-                    elevation = 60.dp,
-                    shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
-                    spotColor = Color.Black.copy(alpha = 0.5f),
-                    ambientColor = Color.Black.copy(alpha = 0.3f)
-                ),
-            // Square bottom corners to sit flush with the screen edge
-            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
-            tonalElevation = 8.dp
-        ) {
-            Column(
+            // Menu Button (Top Left)
+            IconButton(
+                onClick = { scope.launch { drawerState.open() } },
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .padding(top = 48.dp, start = 16.dp)
+                    .size(48.dp)
+                    .background(Color.White.copy(alpha = 0.9f), CircleShape)
+                    .align(Alignment.TopStart)
             ) {
-                // Simplified Drag Handle: Thick, short bar with rounded ends
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(35.dp) // Explicit touch area
-                        .pointerInput(Unit) {
-                            detectTapGestures(onTap = { isPanelExpanded = !isPanelExpanded })
-                        }
-                        .draggable(
-                            orientation = Orientation.Vertical,
-                            state = rememberDraggableState { delta ->
-                                if (delta < -5) isPanelExpanded = true
-                                if (delta > 5) isPanelExpanded = false
-                            },
-                            onDragStopped = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) }
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(width = 40.dp, height = 5.dp) // short, thick
-                            .background(Color.Gray.copy(alpha = 0.5f), RoundedCornerShape(2.5.dp)) // rounded ends
+                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.Black)
+            }
+
+            // SYNC STATUS & BUTTON OVERLAY
+            val syncColor = if (unsyncedCount > 0) Color(0xFFFFD355) else Color(0xFF509FB7)
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 48.dp, end = 20.dp)
+                    .shadow(
+                        elevation = 48.dp,
+                        shape = RoundedCornerShape(24.dp),
+                        spotColor = syncColor,
+                        ambientColor = syncColor
                     )
-                }
-
-                if (isPanelExpanded) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                val sourceSans =
-                                    feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
-                                val vibrantBlue = Color(0xFF89C9F7)
-
-                                Text(
-                                    text = buildAnnotatedString {
-                                        withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
-                                            append(
-                                                "Synced: "
-                                            )
-                                        }
-                                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                                            append(
-                                                "$syncedCount"
-                                            )
-                                        }
-                                    },
-                                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = sourceSans),
-                                    color = vibrantBlue
-                                )
-                                Text(
-                                    text = buildAnnotatedString {
-                                        withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
-                                            append(
-                                                "Unsynced: "
-                                            )
-                                        }
-                                        withStyle(
-                                            SpanStyle(
-                                                fontWeight = FontWeight.Bold,
-                                                color = vibrantBlue
-                                            )
-                                        ) { append("$unsyncedCount") }
-                                    },
-                                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = sourceSans),
-                                    color = if (unsyncedCount > 0) PROJECT_Red else MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = buildAnnotatedString {
-                                        withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
-                                            append(
-                                                "Total Points: "
-                                            )
-                                        }
-                                        withStyle(
-                                            SpanStyle(
-                                                fontWeight = FontWeight.Bold,
-                                                color = vibrantBlue
-                                            )
-                                        ) { append("${allPoints.size}") }
-                                    },
-                                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = sourceSans)
-                                )
-                            }
-
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                val lastPoint = allPoints.lastOrNull()
-                                val dist = lastPoint?.totalDistance?.div(1000) ?: 0f
-
-                                // Calculate unique days travelled
-                                val uniqueDays = allPoints.map {
-                                    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(
-                                        Date(
-                                            it.timestamp
-                                        )
-                                    )
-                                }.distinct().size
-
-                                Surface(
-                                    color = Color(0xFFD5E5F3),
-                                    shape = CircleShape,
-                                    modifier = Modifier.padding(bottom = 4.dp)
-                                ) {
-                                    Text(
-                                        text = String.format("%.2f km", dist),
-                                        modifier = Modifier.padding(
-                                            horizontal = 16.dp,
-                                            vertical = 6.dp
-                                        ),
-                                        style = MaterialTheme.typography.headlineMedium.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
-                                        ),
-                                        color = Color(0xFF89C9F7)
-                                    )
+                    .border(0.3.dp, syncColor.copy(alpha = 0.5f), RoundedCornerShape(24.dp)),
+                color = Color.White,
+                shape = RoundedCornerShape(24.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.IconButton(
+                        onClick = {
+                            scope.launch {
+                                val intent = Intent(context, SyncForegroundService::class.java).apply {
+                                    action = SyncForegroundService.ACTION_START_SYNC
                                 }
-
-                                Text(
-                                    text = "Past $uniqueDays days | Travelled",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Light,
-                                        fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
-                                    )
-                                )
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    context.startForegroundService(intent)
+                                } else {
+                                    context.startService(intent)
+                                }
                             }
                         }
-
-                        HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
-
+                    ) {
                         if (isSyncing) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                androidx.compose.material3.CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text("Syncing...", style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                        
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Draw Tracks", style = MaterialTheme.typography.bodyMedium)
-                            Switch(
-                                checked = isDrawTracksEnabled,
-                                onCheckedChange = { isDrawTracksEnabled = it }
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Icon(
+                                Icons.Rounded.CloudSync,
+                                contentDescription = "Sync",
+                                tint = MaterialTheme.colorScheme.primary
                             )
                         }
+                    }
 
-                        if (isDrawTracksEnabled) {
-                            Box {
-                                Button(
-                                    onClick = { isDurationMenuExpanded = true },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                                    )
-                                ) {
-                                    Icon(Icons.Rounded.History, null)
-                                    Spacer(Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .height(24.dp)
+                            .background(Color.LightGray.copy(alpha = 0.5f))
+                    )
+
+                    Spacer(Modifier.width(12.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .size(14.dp)
+                            .background(syncColor, CircleShape)
+                            .border(2.dp, Color.White, CircleShape)
+                    )
+
+                    Spacer(Modifier.width(12.dp))
+                }
+            }
+
+            FloatingActionButton(
+                onClick = {
+                    isFollowingUser = true
+                    mapViewInstance.value?.let {
+                        it.mapOrientation = 0f
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(bottom = fabPadding, end = 20.dp)
+                    .shadow(
+                        elevation = 53.dp,
+                        shape = RoundedCornerShape(27.dp),
+                        spotColor = MaterialTheme.colorScheme.primary,
+                        ambientColor = MaterialTheme.colorScheme.primary
+                    ),
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.primary
+            ) {
+                Icon(Icons.Rounded.MyLocation, contentDescription = "Recenter")
+            }
+
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(panelHeight)
+                    .shadow(
+                        elevation = 60.dp,
+                        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
+                        spotColor = Color.Black.copy(alpha = 0.5f),
+                        ambientColor = Color.Black.copy(alpha = 0.3f)
+                    ),
+                // Square bottom corners to sit flush with the screen edge
+                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
+                tonalElevation = 8.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Simplified Drag Handle: Thick, short bar with rounded ends
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(35.dp) // Explicit touch area
+                            .pointerInput(Unit) {
+                                detectTapGestures(onTap = { isPanelExpanded = !isPanelExpanded })
+                            }
+                            .draggable(
+                                orientation = Orientation.Vertical,
+                                state = rememberDraggableState { delta ->
+                                    if (delta < -5) isPanelExpanded = true
+                                    if (delta > 5) isPanelExpanded = false
+                                },
+                                onDragStopped = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(width = 40.dp, height = 5.dp) // short, thick
+                                .background(Color.Gray.copy(alpha = 0.5f), RoundedCornerShape(2.5.dp)) // rounded ends
+                        )
+                    }
+
+                    if (isPanelExpanded) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    val sourceSans =
+                                        feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
+                                    val vibrantBlue = Color(0xFF89C9F7)
+
                                     Text(
-                                        text = "Duration: $selectedDuration",
-                                        style = MaterialTheme.typography.bodyMedium.copy(
-                                            fontWeight = FontWeight.Light,
+                                        text = buildAnnotatedString {
+                                            withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
+                                                append(
+                                                    "Synced: "
+                                                )
+                                            }
+                                            withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                                                append(
+                                                    "$syncedCount"
+                                                )
+                                            }
+                                        },
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontFamily = sourceSans),
+                                        color = vibrantBlue
+                                    )
+                                    Text(
+                                        text = buildAnnotatedString {
+                                            withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
+                                                append(
+                                                    "Unsynced: "
+                                                )
+                                            }
+                                            withStyle(
+                                                SpanStyle(
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = vibrantBlue
+                                                )
+                                            ) { append("$unsyncedCount") }
+                                        },
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontFamily = sourceSans),
+                                        color = if (unsyncedCount > 0) PROJECT_Red else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = buildAnnotatedString {
+                                            withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
+                                                append(
+                                                    "Total Points: "
+                                                )
+                                            }
+                                            withStyle(
+                                                SpanStyle(
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = vibrantBlue
+                                                )
+                                            ) { append("${allPoints.size}") }
+                                        },
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontFamily = sourceSans)
+                                    )
+                                }
+
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    val lastPoint = allPoints.lastOrNull()
+                                    val dist = lastPoint?.totalDistance?.div(1000) ?: 0f
+
+                                    // Calculate unique days travelled
+                                    val uniqueDays = allPoints.map {
+                                        sdf.format(Date(it.timestamp))
+                                    }.distinct().size
+
+                                    Surface(
+                                        color = Color(0xFFD5E5F3),
+                                        shape = CircleShape,
+                                        modifier = Modifier.padding(bottom = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = String.format("%.2f km", dist),
+                                            modifier = Modifier.padding(
+                                                horizontal = 16.dp,
+                                                vertical = 6.dp
+                                            ),
+                                            style = MaterialTheme.typography.headlineMedium.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
+                                            ),
+                                            color = Color(0xFF89C9F7)
+                                        )
+                                    }
+
+                                    Text(
+                                        text = "Past $uniqueDays days | Travelled",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Light,
                                             fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
                                         )
                                     )
                                 }
-                                DropdownMenu(
-                                    expanded = isDurationMenuExpanded,
-                                    onDismissRequest = { isDurationMenuExpanded = false }
+                            }
+
+                            HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
+
+                            if (isSyncing) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
                                 ) {
-                                    listOf("Last Hour", "Last 24h", "All").forEach { duration ->
-                                        DropdownMenuItem(
-                                            text = {
-                                                Text(
-                                                    text = duration,
-                                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                                        fontWeight = FontWeight.Light,
-                                                        fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
-                                                    )
-                                                )
-                                            },
-                                            onClick = {
-                                                selectedDuration = duration
-                                                isDurationMenuExpanded = false
-                                            }
+                                    androidx.compose.material3.CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Syncing...", style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Draw Tracks", style = MaterialTheme.typography.bodyMedium)
+                                Switch(
+                                    checked = isDrawTracksEnabled,
+                                    onCheckedChange = { isDrawTracksEnabled = it }
+                                )
+                            }
+
+                            if (isDrawTracksEnabled) {
+                                Box {
+                                    Button(
+                                        onClick = { isDurationMenuExpanded = true },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                                         )
+                                    ) {
+                                        Icon(Icons.Rounded.History, null)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = "Duration: $selectedDuration",
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontWeight = FontWeight.Light,
+                                                fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
+                                            )
+                                        )
+                                    }
+                                    DropdownMenu(
+                                        expanded = isDurationMenuExpanded,
+                                        onDismissRequest = { isDurationMenuExpanded = false }
+                                    ) {
+                                        listOf("Last Hour", "Last 24h", "All").forEach { duration ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        text = duration,
+                                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                                            fontWeight = FontWeight.Light,
+                                                            fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
+                                                        )
+                                                    )
+                                                },
+                                                onClick = {
+                                                    selectedDuration = duration
+                                                    isDurationMenuExpanded = false
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -991,7 +1121,6 @@ fun OSMMapScreen(
         }
     }
 }
-}
 
 suspend fun importCsvFromUri(context: Context, uri: Uri, currentUserId: String): Int {
     return try {
@@ -999,12 +1128,12 @@ suspend fun importCsvFromUri(context: Context, uri: Uri, currentUserId: String):
         val existingPoints = database.locationDao().getAllPoints(currentUserId).toMutableList()
         val existingTimestamps = existingPoints.map { it.timestamp }.toSet()
         val importedPoints = mutableListOf<LocationEntity>()
-        
+
         context.contentResolver.openInputStream(uri)?.use { inputStream ->
             val reader = inputStream.bufferedReader()
             val _header = reader.readLine() // Skip header
             val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-            
+
             reader.forEachLine { line ->
                 val parts = line.split(",")
                 if (parts.size >= 10) {
@@ -1017,7 +1146,7 @@ suspend fun importCsvFromUri(context: Context, uri: Uri, currentUserId: String):
                         } catch (e: Exception) {
                             tsText.toLong()
                         }
-                        
+
                         if (!existingTimestamps.contains(timestamp)) {
                             importedPoints.add(LocationEntity(
                                 userId = currentUserId,
@@ -1035,15 +1164,15 @@ suspend fun importCsvFromUri(context: Context, uri: Uri, currentUserId: String):
                 }
             }
         }
-        
+
         if (importedPoints.isNotEmpty()) {
             // Sort merged list by timestamp to ensure sequence for distance calculation
             val allMerged = (existingPoints + importedPoints).sortedBy { it.timestamp }
-            
+
             val updatedPoints = mutableListOf<LocationEntity>()
             var totalDist = 0f
             var lastPoint: LocationEntity? = null
-            
+
             allMerged.forEach { point ->
                 var distFromPrev = 0f
                 if (lastPoint != null) {
@@ -1063,7 +1192,7 @@ suspend fun importCsvFromUri(context: Context, uri: Uri, currentUserId: String):
                 ))
                 lastPoint = updatedPoints.last()
             }
-            
+
             database.locationDao().deleteAll(currentUserId)
             database.locationDao().insertAll(updatedPoints)
         }
@@ -1079,7 +1208,7 @@ suspend fun writeCsvToUri(context: Context, uri: Uri, points: List<LocationEntit
         context.contentResolver.openOutputStream(uri)?.use { outputStream ->
             val csvHeader = "ID,UserID,Latitude,Longitude,Timestamp,Speed,Accuracy,DistancePrev,TotalDistance,IsSynced\n"
             val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-            
+
             outputStream.write(csvHeader.toByteArray())
             points.forEach { point ->
                 val line = "${point.id},${point.userId},${point.latitude},${point.longitude},${sdf.format(Date(point.timestamp))},${point.speed ?: 0f},${point.accuracy},${point.distanceFromPrevious},${point.totalDistance},${point.isSynced}\n"
@@ -1102,7 +1231,7 @@ fun LocationGlowIndicator(status: ForeGroundService.Status) {
     }
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    
+
     // Safety: Use a slightly more robust animation setup
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 1.2f,
@@ -1139,7 +1268,7 @@ fun LocationGlowIndicator(status: ForeGroundService.Status) {
                 )
             }
         }
-        
+
         Surface(
             modifier = Modifier.size(14.dp),
             shape = CircleShape,
@@ -1155,4 +1284,3 @@ fun LocationGlowIndicator(status: ForeGroundService.Status) {
 fun AppPreview() {
     LocationGlowIndicator(ForeGroundService.Status.ACTIVE)
 }
-
