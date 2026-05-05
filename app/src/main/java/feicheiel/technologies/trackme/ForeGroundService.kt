@@ -28,9 +28,11 @@ import com.google.android.gms.location.Priority
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import android.os.PowerManager
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 class ForeGroundService: Service() {
@@ -126,7 +128,12 @@ class ForeGroundService: Service() {
 
                     _currentLocation.value = filteredLocation
                     status = Status.ACTIVE
-                    updateCityFromLocation(filteredLocation.latitude, filteredLocation.longitude)
+                    
+                    // Throttle geocoder to once every 30 seconds to save resources
+                    if (now - lastGeocoderTime > 30000L) {
+                        lastGeocoderTime = now
+                        updateCityFromLocation(filteredLocation.latitude, filteredLocation.longitude)
+                    }
 
                     // 4. Check movement and save
                     val isMoving = if (filteredLocation.hasSpeed()) filteredLocation.speed > 0.6f else true
@@ -184,6 +191,7 @@ class ForeGroundService: Service() {
         unregisterReceiver(providerReceiver)
         stopLocationUpdates()
         releaseWakeLock()
+        serviceScope.cancel()
     }
 
     override fun onBind(p0: Intent?): IBinder? {
@@ -267,15 +275,20 @@ class ForeGroundService: Service() {
         wakeLock = null
     }
 
+    private var lastGeocoderTime = 0L
+
     private fun updateCityFromLocation(lat: Double, lon: Double){
-        try {
-            val geocoder = Geocoder(this@ForeGroundService, Locale.getDefault())
-            val addresses = geocoder.getFromLocation(lat, lon, 1)
-            if (!addresses.isNullOrEmpty()) {
-                cityName = addresses[0].locality ?: addresses[0].adminArea ?: "Unknown"
+        serviceScope.launch {
+            try {
+                val geocoder = Geocoder(this@ForeGroundService, Locale.getDefault())
+                // Use the newer API if available or wrap in try-catch for older
+                val addresses = geocoder.getFromLocation(lat, lon, 1)
+                if (!addresses.isNullOrEmpty()) {
+                    cityName = addresses[0].locality ?: addresses[0].adminArea ?: "Unknown"
+                }
+            } catch (e: Exception) {
+                Log.e("ForeGroundService", "Geocoder error: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.e("ForeGroundService", "Geocoder error: ${e.message}")
         }
     }
 
@@ -381,17 +394,13 @@ class ForeGroundService: Service() {
 
     private fun syncData() {
         if (currentUserId == null) return
-        serviceScope.launch {
-            val unsyncedPoints = database.locationDao().getUnsyncedPoints(currentUserId!!)
-            if (unsyncedPoints.isNotEmpty()) {
-                val syncedPoints = unsyncedPoints.map { it.copy(isSynced = true) }
-                database.locationDao().markAsSynced(syncedPoints)
-                
-                // Refresh notification UI
-                val allPoints = database.locationDao().getAllPoints(currentUserId!!)
-                val lastPoint = allPoints.lastOrNull()
-                updateStatsUI(lastPoint?.totalDistance ?: 0f, allPoints.size)
-            }
+        val intent = Intent(this, SyncForegroundService::class.java).apply {
+            action = SyncForegroundService.ACTION_START_SYNC
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
         }
     }
 

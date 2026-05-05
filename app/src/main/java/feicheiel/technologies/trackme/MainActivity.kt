@@ -412,8 +412,8 @@ fun OSMMapScreen(
     val configuration = LocalConfiguration.current
     val haptic = LocalHapticFeedback.current
     val screenHeight = configuration.screenHeightDp.dp
-    val expandedHeight = screenHeight * 0.27f
-    val collapsedHeight = 37.dp // Very compact collapsed state
+    val expandedHeight = screenHeight * 0.37f
+    val collapsedHeight = 43.dp // Very compact collapsed state
     
     val panelHeight by animateDpAsState(
         targetValue = if (isPanelExpanded) expandedHeight else collapsedHeight,
@@ -439,6 +439,64 @@ fun OSMMapScreen(
 
     // Use default OSM tiles for clarity
     val mapTileSource = TileSourceFactory.MAPNIK
+
+    // 1. Memoize track polylines to prevent thousands of allocations per second
+    val trackOverlays = remember(allPoints, isDrawTracksEnabled, selectedDuration) {
+        val polylines = mutableListOf<Polyline>()
+        if (isDrawTracksEnabled && allPoints.isNotEmpty()) {
+            val now = System.currentTimeMillis()
+            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+            val todayKey = sdf.format(Date(now))
+            
+            val filteredPoints = allPoints.filter { 
+                when(selectedDuration) {
+                    "Last Hour" -> it.timestamp > now - 3600000
+                    "Last 24h" -> it.timestamp > now - 86400000
+                    else -> true
+                }
+            }
+
+            if (filteredPoints.isNotEmpty()) {
+                val pointsByDay = filteredPoints.groupBy { sdf.format(Date(it.timestamp)) }
+
+                pointsByDay.forEach { (dayKey, dayPoints) ->
+                    val isToday = dayKey == todayKey
+                    val dayBaseColor = if (isToday) {
+                        android.graphics.Color.parseColor("#FF4500") // Strong OrangeRed
+                    } else {
+                        android.graphics.Color.parseColor("#808080") // Gray
+                    }
+
+                    // Split day points into continuous segments where gaps are <= 1 minute
+                    val continuousSegments = mutableListOf<MutableList<LocationEntity>>()
+                    if (dayPoints.isNotEmpty()) {
+                        var currentSegment = mutableListOf(dayPoints[0])
+                        continuousSegments.add(currentSegment)
+                        for (i in 1 until dayPoints.size) {
+                            if (dayPoints[i].timestamp - dayPoints[i - 1].timestamp > 60000L) {
+                                currentSegment = mutableListOf(dayPoints[i])
+                                continuousSegments.add(currentSegment)
+                            } else {
+                                currentSegment.add(dayPoints[i])
+                            }
+                        }
+                    }
+
+                    continuousSegments.forEach { segment ->
+                        if (segment.size >= 2) {
+                            val polyline = Polyline().apply {
+                                setPoints(segment.map { GeoPoint(it.latitude, it.longitude) })
+                                outlinePaint.color = dayBaseColor
+                                outlinePaint.strokeWidth = 12f
+                            }
+                            polylines.add(polyline)
+                        }
+                    }
+                }
+            }
+        }
+        polylines
+    }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     
@@ -584,61 +642,14 @@ fun OSMMapScreen(
                     }
                 }
 
-                view.overlays.removeAll { it is Polyline }
-                if (isDrawTracksEnabled && allPoints.isNotEmpty()) {
-                    val now = System.currentTimeMillis()
-                    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-                    val todayKey = sdf.format(Date(now))
-                    
-                    val filteredPoints = allPoints.filter { 
-                        when(selectedDuration) {
-                            "Last Hour" -> it.timestamp > now - 3600000
-                            "Last 24h" -> it.timestamp > now - 86400000
-                            else -> true
-                        }
-                    }
-
-                    if (filteredPoints.isNotEmpty()) {
-                        val pointsByDay = filteredPoints.groupBy { sdf.format(Date(it.timestamp)) }
-
-                        pointsByDay.forEach { (dayKey, dayPoints) ->
-                            val isToday = dayKey == todayKey
-                            val dayBaseColor = if (isToday) {
-                                android.graphics.Color.parseColor("#FF4500") // Strong OrangeRed
-                            } else {
-                                android.graphics.Color.parseColor("#808080") // Gray
-                            }
-
-                            // Split day points into continuous segments where gaps are <= 1 minute
-                            val continuousSegments = mutableListOf<MutableList<LocationEntity>>()
-                            if (dayPoints.isNotEmpty()) {
-                                var currentSegment = mutableListOf(dayPoints[0])
-                                continuousSegments.add(currentSegment)
-                                for (i in 1 until dayPoints.size) {
-                                    // 60,000 ms = 1 minute gap
-                                    if (dayPoints[i].timestamp - dayPoints[i - 1].timestamp > 60000L) {
-                                        currentSegment = mutableListOf(dayPoints[i])
-                                        continuousSegments.add(currentSegment)
-                                    } else {
-                                        currentSegment.add(dayPoints[i])
-                                    }
-                                }
-                            }
-
-                            continuousSegments.forEach { segment ->
-                                if (segment.size >= 2) {
-                                    val polyline = Polyline().apply {
-                                        setPoints(segment.map { GeoPoint(it.latitude, it.longitude) })
-                                        outlinePaint.color = dayBaseColor
-                                        outlinePaint.strokeWidth = 12f
-                                    }
-                                    view.overlays.add(polyline)
-                                }
-                            }
-                        }
-                    }
+                // 2. Optimized Overlay Update: Only swap polylines if the cached list changed
+                val existingPolylines = view.overlays.filterIsInstance<Polyline>()
+                if (existingPolylines.size != trackOverlays.size || 
+                    (trackOverlays.isNotEmpty() && existingPolylines.firstOrNull() != trackOverlays.firstOrNull())) {
+                    view.overlays.removeAll { it is Polyline }
+                    view.overlays.addAll(trackOverlays)
+                    view.invalidate()
                 }
-                view.invalidate()
             },
             modifier = Modifier.fillMaxSize()
         )
@@ -667,7 +678,7 @@ fun OSMMapScreen(
                     spotColor = syncColor,
                     ambientColor = syncColor
                 )
-                .border(1.5.dp, syncColor.copy(alpha = 0.5f), RoundedCornerShape(24.dp)),
+                .border(0.3.dp, syncColor.copy(alpha = 0.5f), RoundedCornerShape(24.dp)),
             color = Color.White,
             shape = RoundedCornerShape(24.dp)
         ) {
@@ -734,7 +745,12 @@ fun OSMMapScreen(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(bottom = fabPadding, end = 20.dp)
-                .shadow(elevation = 32.dp, shape = RoundedCornerShape(7.dp), spotColor = MaterialTheme.colorScheme.primary),
+                .shadow(
+                    elevation = 57.dp,
+                    shape = RoundedCornerShape(27.dp),
+                    spotColor = syncColor,
+                    ambientColor = syncColor
+                ),
             containerColor = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.primary
         ) {
@@ -853,7 +869,7 @@ fun OSMMapScreen(
                                 )
                             }
 
-                            Column(horizontalAlignment = Alignment.End) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 val lastPoint = allPoints.lastOrNull()
                                 val dist = lastPoint?.totalDistance?.div(1000) ?: 0f
 
@@ -911,31 +927,7 @@ fun OSMMapScreen(
                                 Text("Syncing...", style = MaterialTheme.typography.bodySmall)
                             }
                         }
-
-                        var trackWhenNotMoving by remember { 
-                            mutableStateOf(prefs.getBoolean("track_when_not_moving", false)) 
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Track even when not moving", style = MaterialTheme.typography.bodyMedium)
-                            Switch(
-                                checked = trackWhenNotMoving,
-                                onCheckedChange = {
-                                    trackWhenNotMoving = it
-                                    prefs.edit().putBoolean("track_when_not_moving", it).apply()
-                                    // Notify service
-                                    val intent = Intent(context, ForeGroundService::class.java).apply {
-                                        action = "UPDATE_SETTINGS"
-                                    }
-                                    context.startService(intent)
-                                }
-                            )
-                        }
-                        Spacer(Modifier.height(13.dp))
+                        
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1110,11 +1102,13 @@ fun LocationGlowIndicator(status: ForeGroundService.Status) {
     }
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    
+    // Safety: Use a slightly more robust animation setup
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 1.2f,
         targetValue = 2.8f,
         animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = LinearEasing),
+            animation = tween(2000, easing = LinearOutSlowInEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "pulseScale"
@@ -1123,7 +1117,7 @@ fun LocationGlowIndicator(status: ForeGroundService.Status) {
         initialValue = 0.6f,
         targetValue = 0f,
         animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = LinearEasing),
+            animation = tween(2000, easing = LinearOutSlowInEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "pulseAlpha"
@@ -1134,12 +1128,16 @@ fun LocationGlowIndicator(status: ForeGroundService.Status) {
         contentAlignment = Alignment.Center
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            drawCircle(
-                color = color,
-                radius = (size.minDimension / 4) * pulseScale,
-                alpha = pulseAlpha,
-                style = Fill
-            )
+            val minDim = size.minDimension
+            // Safety check for NaN or infinite values which cause system_server frame errors
+            if (minDim > 0 && !pulseScale.isNaN() && !pulseAlpha.isNaN()) {
+                drawCircle(
+                    color = color,
+                    radius = (minDim / 4) * pulseScale.coerceAtLeast(0.1f),
+                    alpha = pulseAlpha.coerceIn(0f, 1f),
+                    style = Fill
+                )
+            }
         }
         
         Surface(

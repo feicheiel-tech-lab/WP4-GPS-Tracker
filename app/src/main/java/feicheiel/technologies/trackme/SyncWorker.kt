@@ -9,6 +9,7 @@ import feicheiel.technologies.trackme.api.GeoPointRequest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 class SyncWorker(appContext: Context, workerParams: WorkerParameters) :
     CoroutineWorker(appContext, workerParams) {
@@ -31,7 +32,9 @@ class SyncWorker(appContext: Context, workerParams: WorkerParameters) :
 
         return try {
             val batchSize = 100
-            val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+            val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("UTC")
+            }
             
             for (i in 0 until unsyncedPoints.size step batchSize) {
                 val end = (i + batchSize).coerceAtMost(unsyncedPoints.size)

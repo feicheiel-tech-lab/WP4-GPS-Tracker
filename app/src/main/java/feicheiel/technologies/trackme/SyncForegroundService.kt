@@ -64,7 +64,9 @@ class SyncForegroundService : Service() {
 
                 val total = unsyncedPoints.size
                 val batchSize = 100
-                val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+                val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }
                 val apiService = (applicationContext as TrackMeApp).apiService
 
                 for (i in 0 until total step batchSize) {
