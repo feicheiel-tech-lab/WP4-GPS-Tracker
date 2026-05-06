@@ -40,6 +40,9 @@ interface LocationDao {
     @Query("SELECT COUNT(*) FROM location_points WHERE isSynced = 0 AND userId = :userId")
     fun getUnsyncedCountFlow(userId: String): Flow<Int>
 
+    @Query("SELECT COUNT(id) FROM location_points WHERE userId = :userId")
+    suspend fun getPointCount(userId: String): Int
+
     @Query("SELECT * FROM location_points WHERE userId = :userId ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLastPoint(userId: String): LocationEntity?
 

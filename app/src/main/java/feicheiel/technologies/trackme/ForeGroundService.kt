@@ -32,6 +32,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import android.os.PowerManager
+import android.provider.Settings
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
@@ -203,9 +204,10 @@ class ForeGroundService: Service() {
 
         // Database Initialization
         database = AppDatabase.getDatabase(this)
-        // Retrieve current user ID from SharedPreferences - Default to "default_user"
+        // Use the device's Android ID as the stable, user-independent identifier.
+        // This matches the device key sent in all API calls.
+        currentUserId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
         val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-        currentUserId = prefs.getString("current_user_id", "default_user") ?: "default_user"
         trackWhenNotMoving = prefs.getBoolean("track_when_not_moving", false)
     }
 
@@ -419,7 +421,7 @@ class ForeGroundService: Service() {
     private fun syncData() {
         if (currentUserId == null) return
         val intent = Intent(this, SyncForegroundService::class.java).apply {
-            action = SyncForegroundService.ACTION_START_SYNC
+            action = SyncForegroundService.ACTION_UPLOAD
         }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             startForegroundService(intent)

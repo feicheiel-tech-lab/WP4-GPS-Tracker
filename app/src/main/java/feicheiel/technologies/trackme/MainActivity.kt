@@ -91,10 +91,8 @@ import org.osmdroid.views.overlay.CopyrightOverlay
 import androidx.compose.ui.platform.ComposeView
 
 import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.CloudDownload
 import android.widget.Toast
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
-import androidx.work.await
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -137,7 +135,7 @@ class MainActivity : ComponentActivity() {
         uri?.let {
             lifecycleScope.launch {
                 val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-                val userId = prefs.getString("current_user_id", "default_user") ?: "default_user"
+                val userId = if (Constants.IS_TEST) "${getDeviceID()} [test-data]" else getDeviceID()
                 val importedCount = importCsvFromUri(this@MainActivity, it, userId)
                 if (importedCount > 0) {
                     Toast.makeText(this@MainActivity, "Imported $importedCount new points", Toast.LENGTH_SHORT).show()
@@ -161,7 +159,7 @@ class MainActivity : ComponentActivity() {
             lifecycleScope.launch {
                 val database = AppDatabase.getDatabase(this@MainActivity)
                 val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-                val userId = prefs.getString("current_user_id", "default_user") ?: "default_user"
+                val userId = if (Constants.IS_TEST) "${getDeviceID()} [test-data]" else getDeviceID()
                 val points = database.locationDao().getAllPoints(userId)
 
                 if (writeCsvToUri(this@MainActivity, it, points)) {
@@ -176,11 +174,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun getDeviceID(): String =
+        Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+
     private fun initiateExport() {
         isLoggingOut = false
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val prefs = getSharedPreferences("user_prefs", MODE_PRIVATE)
-        val userId = prefs.getString("current_user_id", "user") ?: "user"
+        val userId = if (Constants.IS_TEST) "${getDeviceID()} [test-data]" else getDeviceID()
         createDocumentLauncher.launch("trackme_export_${userId}_$timestamp.csv")
     }
 
@@ -188,13 +189,19 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val database = AppDatabase.getDatabase(this@MainActivity)
             val prefs = getSharedPreferences("user_prefs", MODE_PRIVATE)
-            val userId = prefs.getString("current_user_id", "default_user") ?: "default_user"
+            val userId = if (Constants.IS_TEST) "${getDeviceID()} [test-data]" else getDeviceID()
 
             val unsyncedCount = database.locationDao().getUnsyncedCount(userId)
             if (unsyncedCount > 0) {
-                Toast.makeText(this@MainActivity, "Syncing $unsyncedCount unsynced points...", Toast.LENGTH_SHORT).show()
-                val workRequest = OneTimeWorkRequestBuilder<SyncWorker>().build()
-                WorkManager.getInstance(this@MainActivity).enqueue(workRequest)
+                Toast.makeText(this@MainActivity, "Uploading $unsyncedCount unsynced points before logout...", Toast.LENGTH_SHORT).show()
+                val intent = Intent(this@MainActivity, SyncForegroundService::class.java).apply {
+                    action = SyncForegroundService.ACTION_UPLOAD
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent)
+                } else {
+                    startService(intent)
+                }
             }
 
             isLoggingOut = true
@@ -217,7 +224,6 @@ class MainActivity : ComponentActivity() {
             getSharedPreferences("auth", Context.MODE_PRIVATE).edit().clear().apply()
             getSharedPreferences("user_prefs", Context.MODE_PRIVATE).edit().clear().apply()
 
-            startActivity(Intent(this@MainActivity, feicheiel.technologies.trackme.ui.AuthActivity::class.java))
             finish()
         }
     }
@@ -240,14 +246,13 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK)
         )
 
-        val sharedPref = getSharedPreferences("auth", Context.MODE_PRIVATE)
         val userPrefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-        val isLoggedIn = sharedPref.getString("user_id", null) != null || userPrefs.getString("current_user_id", null) != null
-
-        if (!isLoggedIn) {
-            startActivity(Intent(this, feicheiel.technologies.trackme.ui.AuthActivity::class.java))
-            finish()
-            return
+        var userId = userPrefs.getString("current_user_id", null)
+        if (userId == null) {
+            userId = if (Constants.IS_TEST) "${getDeviceID()} [test-data]" else getDeviceID()
+            userPrefs.edit().putString("current_user_id", userId).apply()
+            // Also clear the old "auth" preference if it exists
+            getSharedPreferences("auth", Context.MODE_PRIVATE).edit().clear().apply()
         }
 
         if (hasRequiredPermissions()) {
@@ -267,7 +272,7 @@ class MainActivity : ComponentActivity() {
         Configuration.getInstance().osmdroidTileCache = File(basePath, "tiles")
 
         // Copy offline map from assets if it exists
-        // copyOfflineMapFromAssets("aoi.mbtiles")
+        copyOfflineMapFromAssets("aoi.mbtiles")
 
         setContent {
             TrackMeTheme {
@@ -277,7 +282,8 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.padding(top = innerPadding.calculateTopPadding()),
                         onLogout = { initiateLogout() },
                         onExport = { initiateExport() },
-                        onImport = { initiateImport() }
+                        onImport = { initiateImport() },
+                        userId
                     )
                 }
             }
@@ -346,21 +352,17 @@ fun OSMMapScreen(
     modifier: Modifier = Modifier,
     onLogout: () -> Unit,
     onExport: () -> Unit,
-    onImport: () -> Unit
+    onImport: () -> Unit,
+    userId: String
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val database = remember { AppDatabase.getDatabase(context) }
 
-    val workManager = remember { WorkManager.getInstance(context) }
-    val syncWorkInfo by workManager.getWorkInfosByTagFlow("sync_tag").collectAsStateWithLifecycle(initialValue = emptyList())
-    val isSyncing = syncWorkInfo.any { it.state == androidx.work.WorkInfo.State.RUNNING || it.state == androidx.work.WorkInfo.State.ENQUEUED }
+    val isSyncing by SyncForegroundService.isSyncing.collectAsState(initial = false)
 
     // Attempt to get last known location for initial center
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
-
-    val prefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-    val userId = prefs.getString("current_user_id", "default_user") ?: "default_user"
 
     val location by ForeGroundService.currentLocation.collectAsState()
     val status by ForeGroundService.currentStatus.collectAsState()
@@ -408,7 +410,7 @@ fun OSMMapScreen(
                 if (lastLoc != null && location == null) {
                     mapViewInstance.value?.controller?.apply {
                         setCenter(GeoPoint(lastLoc.latitude, lastLoc.longitude))
-                        setZoom(3.3)
+                        setZoom(17.0)
                     }
                 }
             }
@@ -663,13 +665,32 @@ fun OSMMapScreen(
                 HorizontalDivider()
                 NavigationDrawerItem(
                     icon = { Icon(Icons.Rounded.CloudSync, contentDescription = null) },
-                    label = { Text("Sync Now") },
+                    label = { Text("Upload to Server") },
                     selected = false,
                     onClick = {
                         scope.launch {
                             drawerState.close()
                             val intent = Intent(context, SyncForegroundService::class.java).apply {
-                                action = SyncForegroundService.ACTION_START_SYNC
+                                action = SyncForegroundService.ACTION_UPLOAD
+                            }
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                context.startForegroundService(intent)
+                            } else {
+                                context.startService(intent)
+                            }
+                        }
+                    },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Rounded.CloudDownload, contentDescription = null) },
+                    label = { Text("Download from Server") },
+                    selected = false,
+                    onClick = {
+                        scope.launch {
+                            drawerState.close()
+                            val intent = Intent(context, SyncForegroundService::class.java).apply {
+                                action = SyncForegroundService.ACTION_DOWNLOAD
                             }
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                 context.startForegroundService(intent)
@@ -839,7 +860,7 @@ fun OSMMapScreen(
                         onClick = {
                             scope.launch {
                                 val intent = Intent(context, SyncForegroundService::class.java).apply {
-                                    action = SyncForegroundService.ACTION_START_SYNC
+                                    action = SyncForegroundService.ACTION_UPLOAD
                                 }
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                     context.startForegroundService(intent)

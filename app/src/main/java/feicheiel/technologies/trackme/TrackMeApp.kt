@@ -4,92 +4,64 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
-import androidx.work.Constraints
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.NetworkType
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
-import java.util.Calendar
-import java.util.TimeZone
-import java.util.concurrent.TimeUnit
-
-import feicheiel.technologies.trackme.api.AuthApi
-import feicheiel.technologies.trackme.api.GeoApi
+import feicheiel.technologies.trackme.api.ApiService
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.util.concurrent.TimeUnit
 
-class TrackMeApp: Application() {
+class TrackMeApp : Application() {
 
-    lateinit var apiService: GeoApi
-    lateinit var authApiService: AuthApi
+    /** Single Retrofit service wired to the geologger endpoint. */
+    lateinit var apiService: ApiService
+        private set
 
     override fun onCreate() {
         super.onCreate()
-        
+
         val logging = HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BODY
         }
-        
+
         val client = OkHttpClient.Builder()
             .addInterceptor(logging)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .build()
-        
-        val retrofit = Retrofit.Builder()
-            .baseUrl("http://192.168.8.118:8000/")
+
+        apiService = Retrofit.Builder()
+            .baseUrl("https://geologger.pathplotter.net/")
             .client(client)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-        
-        apiService = retrofit.create(GeoApi::class.java)
-        authApiService = retrofit.create(AuthApi::class.java)
+            .create(ApiService::class.java)
 
-        scheduleMidnightSync()
+        // Schedule the nightly midnight upload via AlarmManager.
+        // BootReceiver will re-schedule after a device reboot.
+        MidnightSyncReceiver.scheduleMidnightSync(this)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                "running_channel",
-                "Running Notifications",
-                NotificationManager.IMPORTANCE_HIGH
-            )
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            notificationManager.createNotificationChannel(channel)
-        }
+        createNotificationChannels()
     }
 
-    private fun scheduleMidnightSync() {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-
-        // Calculate delay until 00:00 GMT
-        val currentDate = Calendar.getInstance(TimeZone.getTimeZone("GMT"))
-        val dueDate = Calendar.getInstance(TimeZone.getTimeZone("GMT")).apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-            if (before(currentDate)) {
-                add(Calendar.HOUR_OF_DAY, 24)
-            }
+    private fun createNotificationChannels() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    "running_channel",
+                    "Tracking Notifications",
+                    NotificationManager.IMPORTANCE_HIGH
+                )
+            )
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    "sync_channel",
+                    "Sync Notifications",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+            )
         }
-
-        val initialDelay = dueDate.timeInMillis - currentDate.timeInMillis
-
-        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(24, TimeUnit.HOURS)
-            .setConstraints(constraints)
-            .setInitialDelay(initialDelay, TimeUnit.MILLISECONDS)
-            .addTag("midnight_sync")
-            .build()
-
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "midnight_sync",
-            ExistingPeriodicWorkPolicy.KEEP,
-            syncRequest
-        )
     }
 }
