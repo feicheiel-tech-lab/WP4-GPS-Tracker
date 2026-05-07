@@ -58,11 +58,21 @@ class MidnightSyncReceiver : BroadcastReceiver() {
             // midnight trigger that needs to run regardless of device idle state.
             // On Android 12+ this requires SCHEDULE_EXACT_ALARM or
             // USE_EXACT_ALARM permission in the manifest.
-            alarmManager.setAndAllowWhileIdle(
-                android.app.AlarmManager.RTC_WAKEUP,
-                midnight.timeInMillis,
-                pendingIntent
-            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (alarmManager.canScheduleExactAlarms()) {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        android.app.AlarmManager.RTC_WAKEUP,
+                        midnight.timeInMillis,
+                        pendingIntent
+                    )
+                }
+            } else {
+                alarmManager.setExactAndAllowWhileIdle(
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    midnight.timeInMillis,
+                    pendingIntent
+                )
+            }
         }
     }
 }

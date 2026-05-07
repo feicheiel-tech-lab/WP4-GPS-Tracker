@@ -139,6 +139,18 @@ class MainActivity : ComponentActivity() {
                 val importedCount = importCsvFromUri(this@MainActivity, it, userId)
                 if (importedCount > 0) {
                     Toast.makeText(this@MainActivity, "Imported $importedCount new points", Toast.LENGTH_SHORT).show()
+
+                    // Tell the running ForeGroundService to re-read the DB and refresh
+                    // its notification. Without this, the notification's "X km | Y pts"
+                    // line stays stuck on pre-import values until the next GPS fix
+                    // arrives — because that's the only path that calls updateStatsUI().
+                    Intent(this@MainActivity, ForeGroundService::class.java).also { refresh ->
+                        refresh.action = ForeGroundService.Actions.UPDATE.toString()
+                        // startService is fine here: the service is already running in
+                        // the foreground, so this is a no-op start that just delivers
+                        // the action to onStartCommand().
+                        startService(refresh)
+                    }
                 } else if (importedCount == 0) {
                     Toast.makeText(this@MainActivity, "No new points to import", Toast.LENGTH_SHORT).show()
                 } else {
@@ -228,6 +240,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Step 1: Request fine location (+ notifications). After granting, we separately ask
+    // for background location because Android 11+ forbids bundling both in one dialog.
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -235,6 +249,28 @@ class MainActivity : ComponentActivity() {
         if (fineLocationGranted) {
             startTrackingService()
             requestIgnoreBatteryOptimizations()
+            // Step 2: now that fine location is granted, ask for background location.
+            // This must be a separate request — the system rejects it if bundled with fine location.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                ContextCompat.checkSelfPermission(
+                    this, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            }
+        }
+    }
+
+    // Step 2: Standalone background-location request — must be separate on Android 11+.
+    private val backgroundLocationLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(
+                this,
+                "Background location denied — tracking may stop when the screen turns off",
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
@@ -254,6 +290,14 @@ class MainActivity : ComponentActivity() {
             // Also clear the old "auth" preference if it exists
             getSharedPreferences("auth", Context.MODE_PRIVATE).edit().clear().apply()
         }
+
+        // Use internal storage for osmdroid so SQLite WAL-mode ioctls (FS_IOC_GETFLAGS)
+        // work on all devices. External FUSE storage blocks these ioctls via SELinux on
+        // non-Samsung phones (permissive=0), causing SQLite errors and tile-cache corruption.
+        val _basePath = File(filesDir, "osmdroid")
+        _basePath.mkdirs()
+        Configuration.getInstance().osmdroidBasePath = _basePath
+        Configuration.getInstance().osmdroidTileCache = File(_basePath, "tiles")
 
         if (hasRequiredPermissions()) {
             startTrackingService()
@@ -291,21 +335,31 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun hasRequiredPermissions(): Boolean {
-        return ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.ACCESS_FINE_LOCATION
+        val fineLoc = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
+
+        // On Android 10+ the service needs background location so it can restart
+        // after being killed by the OS without losing location access.
+        val bgLoc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        } else true // not a concept before Android 10
+
+        return fineLoc && bgLoc
     }
 
     private fun launchPermissionRequest() {
+        // Only request dangerous runtime permissions here.
+        // FOREGROUND_SERVICE_LOCATION is a normal permission — auto-granted from the manifest,
+        // adding it to this batch causes the whole request to fail on some Android 14 builds.
         val permissions = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            permissions.add(Manifest.permission.FOREGROUND_SERVICE_LOCATION)
-        }
         requestPermissionLauncher.launch(permissions.toTypedArray())
+        // Background location is requested in step 2 inside requestPermissionLauncher callback.
     }
 
     private fun startTrackingService() {

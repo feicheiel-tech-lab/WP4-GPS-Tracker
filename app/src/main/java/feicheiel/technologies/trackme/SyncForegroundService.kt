@@ -187,6 +187,7 @@ class SyncForegroundService : Service() {
             val total     = unsynced.size
             val batchSize = 100
             val startTime = System.currentTimeMillis()
+            var anyBatchSynced = false
 
             for (i in 0 until total step batchSize) {
                 val batch = unsynced.subList(i, (i + batchSize).coerceAtMost(total))
@@ -215,6 +216,9 @@ class SyncForegroundService : Service() {
                     accessToken = refreshAccessToken(api) ?: run {
                         Log.e("SyncService", "Cannot refresh token — aborting upload.")
                         notify("Upload failed: auth error", 0, total)
+                        // Even on partial-failure abort, push a refresh so the
+                        // sync-button visibility reflects whatever batches DID land.
+                        if (anyBatchSynced) notifyTrackingServiceToRefresh()
                         delay(3000); stopSelf(); return
                     }
                     response = api.uploadPoints("Bearer $accessToken", payload)
@@ -222,7 +226,15 @@ class SyncForegroundService : Service() {
 
                 if (response.isSuccessful) {
                     dao.markAsSynced(batch.map { it.copy(isSynced = true) })
+                    anyBatchSynced = true
                     Log.d("SyncService", "Batch $i–${i + batch.size} uploaded OK.")
+
+                    // Each batch flips rows from unsynced → synced. The
+                    // ForeGroundService notification's sync-button visibility and
+                    // its synced/unsynced counts are derived from the DB, so ping
+                    // it now so the user sees the counts tick down live instead
+                    // of jumping only at the very end of a long upload.
+                    notifyTrackingServiceToRefresh()
                 } else {
                     val err = response.errorBody()?.string() ?: "no body"
                     Log.e("SyncService", "Batch upload failed: HTTP ${response.code()} — $err")
@@ -230,12 +242,18 @@ class SyncForegroundService : Service() {
             }
 
             notify("Upload complete! ($total points)", 100, 100)
+            // Final refresh — guarantees the tracking notification's stats and
+            // sync-button state reflect the post-upload DB state.
+            notifyTrackingServiceToRefresh()
             delay(2000)
             stopSelf()
 
         } catch (e: Exception) {
             Log.e("SyncService", "Upload error: ${e.message}")
             notify("Upload failed: ${e.message?.take(40)}", 0, 100)
+            // Some batches may have committed before the exception — refresh so
+            // the tracking notification doesn't show a stale unsynced count.
+            notifyTrackingServiceToRefresh()
             delay(3000)
             stopSelf()
         }
@@ -323,6 +341,21 @@ class SyncForegroundService : Service() {
                 dao.insertAll(toInsert)
                 Log.d("SyncService", "Inserted ${toInsert.size} new points from download.")
                 notify("Download complete! (${toInsert.size} new points)", 100, 100)
+
+                // New rows landed in the DB. Tell the tracking foreground service
+                // to refresh — without this, its notification keeps showing
+                // pre-download stats until the next GPS fix arrives.
+                //
+                // NOTE: server-downloaded points may include rows with timestamps
+                // *older* than the most recent local point. Because we computed
+                // their cumulative distance off the local lastPoint (not a strict
+                // chronological sort across the full merged set), the tracking
+                // notification will show a self-consistent total but it is not a
+                // re-baselined recompute the way CSV-import does. If the project
+                // requires strict chronological recompute on download, lift the
+                // recompute-from-scratch logic out of importCsvFromUri into a
+                // shared helper and call it here.
+                notifyTrackingServiceToRefresh()
             } else {
                 notify("Already up to date.", 100, 100)
             }
@@ -347,6 +380,36 @@ class SyncForegroundService : Service() {
     /** Parses "2026-04-07T12:00:00Z" → epoch millis. Returns 0L on failure. */
     private fun parseIsoTimestamp(iso: String): Long =
         try { isoSdf.parse(iso)?.time ?: 0L } catch (_: Exception) { 0L }
+
+    /**
+     * Pokes the tracking foreground service to re-read the DB and refresh the
+     * "X km | Y pts" line + sync-button visibility in its persistent notification.
+     *
+     * Called after any operation that mutates the location_points table without
+     * going through ForeGroundService.onLocationResult():
+     *   • download → inserts new rows
+     *   • upload   → flips isSynced on existing rows (changes unsynced count)
+     *
+     * If ForeGroundService isn't currently running this is a harmless no-op:
+     * Android will deliver the intent to onStartCommand once it starts. We use
+     * startService (not startForegroundService) deliberately — the tracking
+     * service is already promoted to the foreground when it's alive, and we
+     * don't want a transient start during a sync to spin up a new instance and
+     * tangle with the existing one.
+     */
+    private fun notifyTrackingServiceToRefresh() {
+        try {
+            val intent = Intent(applicationContext, ForeGroundService::class.java).apply {
+                action = ForeGroundService.Actions.UPDATE.toString()
+            }
+            startService(intent)
+        } catch (e: Exception) {
+            // Most likely cause: the system blocked a background start while
+            // the tracking service wasn't already running. That's fine — when
+            // it's not alive there are no stale stats to refresh anyway.
+            Log.w("SyncService", "Could not notify ForeGroundService: ${e.message}")
+        }
+    }
 
     // ── Notification ──────────────────────────────────────────────────────────
 

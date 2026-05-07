@@ -204,11 +204,13 @@ class ForeGroundService: Service() {
 
         // Database Initialization
         database = AppDatabase.getDatabase(this)
-        // Use the device's Android ID as the stable, user-independent identifier.
-        // This matches the device key sent in all API calls.
-        currentUserId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-        val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-        trackWhenNotMoving = prefs.getBoolean("track_when_not_moving", false)
+        // Read the userId that MainActivity already stored so IS_TEST suffix stays in sync.
+        val userPrefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+        val storedUserId = userPrefs.getString("current_user_id", null)
+        val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+        currentUserId = storedUserId
+            ?: if (Constants.IS_TEST) "$deviceId [test-data]" else deviceId
+        trackWhenNotMoving = userPrefs.getBoolean("track_when_not_moving", false)
     }
 
     override fun onDestroy() {
@@ -353,6 +355,16 @@ class ForeGroundService: Service() {
         updateStatusUI() // Ensure initial status (Searching/Orange) is applied
         updateNotificationUI()
         startForeground(NOTIFICATION_ID, builder.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+
+        // Populate stats from existing DB before the first GPS fix arrives
+        serviceScope.launch {
+            val userId = currentUserId ?: return@launch
+            val lastPoint = database.locationDao().getLastPoint(userId)
+            val pointsCount = database.locationDao().getAllPoints(userId).size
+            if (lastPoint != null || pointsCount > 0) {
+                updateStatsUI(lastPoint?.totalDistance ?: 0f, pointsCount)
+            }
+        }
     }
 
     private fun updateNotificationUI() {
