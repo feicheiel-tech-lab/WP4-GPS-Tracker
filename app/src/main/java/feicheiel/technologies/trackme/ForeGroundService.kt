@@ -62,6 +62,8 @@ class ForeGroundService: Service() {
     // have genuinely moved fast or the GPS recovered to a new position.
     private val MAX_SPEED_MS = 55f          // ~200 km/h — anything faster is a spike
     private val MIN_ACCURACY_M = 30f        // only reject when accuracy is also poor
+    private val MAX_ACCURACY_M = 50f        // Hard limit: reject all points > 50m accuracy
+    private val MIN_DISTANCE_M = 5f         // Distance filter: only save if moved > 5m
     private val MAX_CONSECUTIVE_REJECTIONS = 5
     private var lastAcceptedLocation: Location? = null
     private var consecutiveRejections = 0
@@ -116,6 +118,13 @@ class ForeGroundService: Service() {
                 locationResult.lastLocation?.let { freshLocation ->
                     val now = System.currentTimeMillis()
 
+                    // 0. Accuracy Filter: discard points with very poor accuracy (> 50m)
+                    // This is the first line of defense against noisy GPS data.
+                    if (freshLocation.hasAccuracy() && freshLocation.accuracy > MAX_ACCURACY_M) {
+                        status = Status.ACTIVE
+                        return@let
+                    }
+
                     // 1. Spike filter: reject GPS jumps that are physically implausible.
                     //    We compare the incoming point against the last *accepted* point
                     //    using both implied speed and the GPS accuracy report.
@@ -160,6 +169,9 @@ class ForeGroundService: Service() {
                     }
 
                     // 3. Check movement and save.
+                    // We use a combination of speed-based detection and a distance filter
+                    // to ensure smooth plots. The distance filter prevents small GPS
+                    // jitter from creating "knots" in the track when stationary.
                     val isMoving = if (filteredLocation.hasSpeed()) filteredLocation.speed > 0.6f else true
 
                     if ((isMoving || trackWhenNotMoving) && currentUserId != null) {
@@ -176,6 +188,14 @@ class ForeGroundService: Service() {
                                     result
                                 )
                                 distanceToPrev = result[0]
+
+                                // Distance Filter: ignore points that haven't moved enough.
+                                // At high speeds, this naturally accepts more points;
+                                // at low speeds or stationary, it filters out noise.
+                                if (distanceToPrev < MIN_DISTANCE_M && !trackWhenNotMoving) {
+                                    return@launch
+                                }
+
                                 newTotalDistance = lastPoint.totalDistance + distanceToPrev
                             }
 
