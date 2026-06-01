@@ -18,6 +18,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -276,11 +277,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Force a solid black status bar so white notification text is always readable
-        // regardless of the map tile colour underneath.
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK)
-        )
+        // Enable true edge-to-edge fullscreen mode
+        enableEdgeToEdge()
 
         val userPrefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
         var userId = userPrefs.getString("current_user_id", null)
@@ -321,13 +319,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             TrackMeTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    // Anchor to the absolute bottom by only applying top padding from the scaffold
+                    // Fullscreen map: map draws behind status/nav bars. 
+                    // UI elements inside OSMMapScreen handle their own safe-area offsets.
                     OSMMapScreen(
-                        modifier = Modifier.padding(top = innerPadding.calculateTopPadding()),
-//                        onLogout = { initiateLogout() },
+                        modifier = Modifier.fillMaxSize(),
                         onExport = { initiateExport() },
                         onImport = { initiateImport() },
-                        userId
+                        userId = userId
                     )
                 }
             }
@@ -478,7 +476,7 @@ fun OSMMapScreen(
     val haptic = LocalHapticFeedback.current
     val screenHeight = configuration.screenHeightDp.dp
     val expandedHeight = screenHeight * 0.37f
-    val collapsedHeight = 43.dp // Very compact collapsed state
+    val collapsedHeight = 72.dp // Raised to clear system navigation bars in fullscreen mode
 
     val panelHeight by animateDpAsState(
         targetValue = if (isPanelExpanded) expandedHeight else collapsedHeight,
@@ -1003,7 +1001,8 @@ fun OSMMapScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp),
+                        .padding(horizontal = 20.dp)
+                        .navigationBarsPadding(),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     // Simplified Drag Handle: Thick, short bar with rounded ends
