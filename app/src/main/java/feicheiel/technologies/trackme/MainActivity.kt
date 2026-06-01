@@ -91,6 +91,9 @@ import java.io.FileOutputStream
 import org.osmdroid.views.overlay.CopyrightOverlay
 import androidx.compose.ui.platform.ComposeView
 
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.CloudDownload
 import android.widget.Toast
@@ -804,6 +807,7 @@ fun OSMMapScreen(
                         setTileSource(mapTileSource)
                         setMultiTouchControls(true)
                         setUseDataConnection(true)
+                        setBuiltInZoomControls(false)
                         controller.setZoom(18.0)
                         mapViewInstance.value = this
 
@@ -961,30 +965,56 @@ fun OSMMapScreen(
                 }
             }
 
-            FloatingActionButton(
-                onClick = {
-                    isFollowingUser = true
-                    val currentLoc = location
-                    mapViewInstance.value?.let { map ->
-                        map.mapOrientation = 0f
-                        if (currentLoc != null) {
-                            map.controller.animateTo(GeoPoint(currentLoc.latitude, currentLoc.longitude), 18.0, 1000L)
-                        }
-                    }
-                },
+            // Action Buttons (Recenter + Zoom)
+            Column(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(bottom = fabPadding, end = 20.dp)
-                    .shadow(
-                        elevation = 53.dp,
-                        shape = RoundedCornerShape(27.dp),
-                        spotColor = MaterialTheme.colorScheme.primary,
-                        ambientColor = MaterialTheme.colorScheme.primary
-                    ),
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.primary
+                    .padding(bottom = fabPadding, end = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Rounded.MyLocation, contentDescription = "Recenter")
+                SmallFloatingActionButton(
+                    onClick = { mapViewInstance.value?.controller?.zoomIn() },
+                    containerColor = Color.White.copy(alpha = 0.9f),
+                    contentColor = Color.Black,
+                    shape = CircleShape,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(Icons.Rounded.Add, contentDescription = "Zoom In")
+                }
+                SmallFloatingActionButton(
+                    onClick = { mapViewInstance.value?.controller?.zoomOut() },
+                    containerColor = Color.White.copy(alpha = 0.9f),
+                    contentColor = Color.Black,
+                    shape = CircleShape,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(Icons.Rounded.Remove, contentDescription = "Zoom Out")
+                }
+
+                FloatingActionButton(
+                    onClick = {
+                        isFollowingUser = true
+                        val currentLoc = location
+                        mapViewInstance.value?.let { map ->
+                            map.mapOrientation = 0f
+                            if (currentLoc != null) {
+                                map.controller.animateTo(GeoPoint(currentLoc.latitude, currentLoc.longitude), 18.0, 1000L)
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .shadow(
+                            elevation = 53.dp,
+                            shape = RoundedCornerShape(27.dp),
+                            spotColor = MaterialTheme.colorScheme.primary,
+                            ambientColor = MaterialTheme.colorScheme.primary
+                        ),
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Icon(Icons.Rounded.MyLocation, contentDescription = "Recenter")
+                }
             }
 
             Surface(
