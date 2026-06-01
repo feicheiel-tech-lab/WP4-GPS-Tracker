@@ -802,7 +802,7 @@ fun OSMMapScreen(
                         setTileSource(mapTileSource)
                         setMultiTouchControls(true)
                         setUseDataConnection(true)
-                        controller.setZoom(23.0)
+                        controller.setZoom(18.0)
                         mapViewInstance.value = this
 
                         clipChildren = false
@@ -843,7 +843,7 @@ fun OSMMapScreen(
 
                             // Center and zoom on first location reception
                             view.controller.setCenter(userPoint)
-                            view.controller.setZoom(23.0)
+                            view.controller.setZoom(18.0)
                         } else {
                             val lp = indicatorComposeView.layoutParams as MapView.LayoutParams
                             lp.geoPoint = userPoint
@@ -962,8 +962,12 @@ fun OSMMapScreen(
             FloatingActionButton(
                 onClick = {
                     isFollowingUser = true
-                    mapViewInstance.value?.let {
-                        it.mapOrientation = 0f
+                    val currentLoc = location
+                    mapViewInstance.value?.let { map ->
+                        map.mapOrientation = 0f
+                        if (currentLoc != null) {
+                            map.controller.animateTo(GeoPoint(currentLoc.latitude, currentLoc.longitude), 18.0, 1000L)
+                        }
                     }
                 },
                 modifier = Modifier
