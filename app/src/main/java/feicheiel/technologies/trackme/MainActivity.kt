@@ -110,7 +110,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.runtime.rememberCompositionContext
 import androidx.compose.ui.graphics.drawscope.Fill
-import androidx.compose.material.icons.automirrored.filled.Logout
+//import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Menu
@@ -127,7 +127,7 @@ import androidx.compose.ui.res.stringResource
 
 class MainActivity : ComponentActivity() {
 
-    private var isLoggingOut = false
+//    private var isLoggingOut = false
 
     private val openDocumentLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -176,9 +176,9 @@ class MainActivity : ComponentActivity() {
 
                 if (writeCsvToUri(this@MainActivity, it, points)) {
                     Toast.makeText(this@MainActivity, "Export successful", Toast.LENGTH_SHORT).show()
-                    if (isLoggingOut) {
-                        performFinalLogout(userId)
-                    }
+//                    if (isLoggingOut) {
+//                        performFinalLogout(userId)
+//                    }
                 } else {
                     Toast.makeText(this@MainActivity, "Export failed", Toast.LENGTH_SHORT).show()
                 }
@@ -190,55 +190,55 @@ class MainActivity : ComponentActivity() {
         Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
 
     private fun initiateExport() {
-        isLoggingOut = false
+//        isLoggingOut = false
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val prefs = getSharedPreferences("user_prefs", MODE_PRIVATE)
         val userId = if (Constants.IS_TEST) "${getDeviceID()} [test-data]" else getDeviceID()
         createDocumentLauncher.launch("trackme_export_${userId}_$timestamp.csv")
     }
 
-    private fun initiateLogout() {
-        lifecycleScope.launch {
-            val database = AppDatabase.getDatabase(this@MainActivity)
-            val prefs = getSharedPreferences("user_prefs", MODE_PRIVATE)
-            val userId = if (Constants.IS_TEST) "${getDeviceID()} [test-data]" else getDeviceID()
-
-            val unsyncedCount = database.locationDao().getUnsyncedCount(userId)
-            if (unsyncedCount > 0) {
-                Toast.makeText(this@MainActivity, "Uploading $unsyncedCount unsynced points before logout...", Toast.LENGTH_SHORT).show()
-                val intent = Intent(this@MainActivity, SyncForegroundService::class.java).apply {
-                    action = SyncForegroundService.ACTION_UPLOAD
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(intent)
-                } else {
-                    startService(intent)
-                }
-            }
-
-            isLoggingOut = true
-            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            createDocumentLauncher.launch("trackme_export_${userId}_$timestamp.csv")
-        }
-    }
-
-    private fun performFinalLogout(userId: String) {
-        // Stop the service
-        Intent(this, ForeGroundService::class.java).also {
-            it.action = ForeGroundService.Actions.STOP.toString()
-            startService(it)
-        }
-
-        lifecycleScope.launch {
-            val database = AppDatabase.getDatabase(this@MainActivity)
-            database.locationDao().deleteAll(userId)
-
-            getSharedPreferences("auth", Context.MODE_PRIVATE).edit().clear().apply()
-            getSharedPreferences("user_prefs", Context.MODE_PRIVATE).edit().clear().apply()
-
-            finish()
-        }
-    }
+//    private fun initiateLogout() {
+//        lifecycleScope.launch {
+//            val database = AppDatabase.getDatabase(this@MainActivity)
+//            val prefs = getSharedPreferences("user_prefs", MODE_PRIVATE)
+//            val userId = if (Constants.IS_TEST) "${getDeviceID()} [test-data]" else getDeviceID()
+//
+//            val unsyncedCount = database.locationDao().getUnsyncedCount(userId)
+//            if (unsyncedCount > 0) {
+//                Toast.makeText(this@MainActivity, "Uploading $unsyncedCount unsynced points before logout...", Toast.LENGTH_SHORT).show()
+//                val intent = Intent(this@MainActivity, SyncForegroundService::class.java).apply {
+//                    action = SyncForegroundService.ACTION_UPLOAD
+//                }
+//                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+//                    startForegroundService(intent)
+//                } else {
+//                    startService(intent)
+//                }
+//            }
+//
+//            isLoggingOut = true
+//            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+//            createDocumentLauncher.launch("trackme_export_${userId}_$timestamp.csv")
+//        }
+//    }
+//
+//    private fun performFinalLogout(userId: String) {
+//        // Stop the service
+//        Intent(this, ForeGroundService::class.java).also {
+//            it.action = ForeGroundService.Actions.STOP.toString()
+//            startService(it)
+//        }
+//
+//        lifecycleScope.launch {
+//            val database = AppDatabase.getDatabase(this@MainActivity)
+//            database.locationDao().deleteAll(userId)
+//
+//            getSharedPreferences("auth", Context.MODE_PRIVATE).edit().clear().apply()
+//            getSharedPreferences("user_prefs", Context.MODE_PRIVATE).edit().clear().apply()
+//
+//            finish()
+//        }
+//    }
 
     // Step 1: Request fine location (+ notifications). After granting, we separately ask
     // for background location because Android 11+ forbids bundling both in one dialog.
@@ -324,7 +324,7 @@ class MainActivity : ComponentActivity() {
                     // Anchor to the absolute bottom by only applying top padding from the scaffold
                     OSMMapScreen(
                         modifier = Modifier.padding(top = innerPadding.calculateTopPadding()),
-                        onLogout = { initiateLogout() },
+//                        onLogout = { initiateLogout() },
                         onExport = { initiateExport() },
                         onImport = { initiateImport() },
                         userId
@@ -404,7 +404,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun OSMMapScreen(
     modifier: Modifier = Modifier,
-    onLogout: () -> Unit,
+//    onLogout: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
     userId: String
@@ -779,19 +779,19 @@ fun OSMMapScreen(
                     },
                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                 )
-                Spacer(Modifier.weight(1f))
-                NavigationDrawerItem(
-                    icon = { Icon(Icons.Default.Logout, contentDescription = null, tint = Color.Red) },
-                    label = { Text("Sign Out", color = Color.Red) },
-                    selected = false,
-                    onClick = {
-                        scope.launch {
-                            drawerState.close()
-                            onLogout()
-                        }
-                    },
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
-                )
+                //Spacer(Modifier.weight(1f))
+//                NavigationDrawerItem(
+//                    icon = { Icon(Icons.Default.Logout, contentDescription = null, tint = Color.Red) },
+//                    label = { Text("Sign Out", color = Color.Red) },
+//                    selected = false,
+//                    onClick = {
+//                        scope.launch {
+//                            drawerState.close()
+//                            onLogout()
+//                        }
+//                    },
+//                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+//                )
             }
         }
     ) {
