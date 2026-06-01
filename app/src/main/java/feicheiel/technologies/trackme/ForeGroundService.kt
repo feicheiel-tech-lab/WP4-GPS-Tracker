@@ -1,5 +1,6 @@
 package feicheiel.technologies.trackme
 
+import android.app.AlarmManager
 import android.annotation.SuppressLint
 import android.app.NotificationManager
 import android.app.Service
@@ -34,6 +35,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import android.os.PowerManager
 import android.provider.Settings
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class ForeGroundService: Service() {
@@ -67,6 +69,8 @@ class ForeGroundService: Service() {
     private val MAX_CONSECUTIVE_REJECTIONS = 5
     private var lastAcceptedLocation: Location? = null
     private var consecutiveRejections = 0
+    private var pauseJob: kotlinx.coroutines.Job? = null
+    private var pauseDurationText: String = "1 hour"
 
     // Kalman Filter
     private var kalmanLat: KalmanFilter? = null
@@ -84,6 +88,9 @@ class ForeGroundService: Service() {
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning = _isRunning.asStateFlow()
+
+        private val _isPaused = MutableStateFlow(false)
+        val isPaused = _isPaused.asStateFlow()
     }
 
     //only updates the notification if the city name is different
@@ -115,6 +122,8 @@ class ForeGroundService: Service() {
         fusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(this)
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(locationResult: LocationResult) {
+                if (_isPaused.value) return
+
                 locationResult.lastLocation?.let { freshLocation ->
                     val now = System.currentTimeMillis()
 
@@ -270,6 +279,14 @@ class ForeGroundService: Service() {
             Actions.SYNC.toString() -> {
                 syncData()
             }
+            Actions.PAUSE.toString() -> {
+                val durationMillis = intent?.getLongExtra("duration_ms", 3600000L) ?: 3600000L
+                pauseDurationText = intent?.getStringExtra("duration_text") ?: "1 hour"
+                pauseTracking(durationMillis)
+            }
+            Actions.RESUME.toString() -> {
+                resumeTracking()
+            }
             "UPDATE_SETTINGS" -> {
                 val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
                 trackWhenNotMoving = prefs.getBoolean("track_when_not_moving", false)
@@ -341,7 +358,7 @@ class ForeGroundService: Service() {
     }
 
     enum class Actions {
-        START, STOP, UPDATE, SYNC
+        START, STOP, UPDATE, SYNC, PAUSE, RESUME
     }
 
     enum class Status {
@@ -373,6 +390,7 @@ class ForeGroundService: Service() {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
 
         updateStatusUI() // Ensure initial status (Searching/Orange) is applied
+        updatePauseUI()
         updateNotificationUI()
         startForeground(NOTIFICATION_ID, builder.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
 
@@ -391,7 +409,9 @@ class ForeGroundService: Service() {
         // Ensure the builder and views are initialized before updating
         if (!::remoteViews.isInitialized || !::builder.isInitialized) return
 
-        val text = if (status == Status.ERROR) {
+        val text = if (_isPaused.value) {
+            "Tracking PAUSED for $pauseDurationText"
+        } else if (status == Status.ERROR) {
             "Tracking PAUSED: GPS is turned off!"
         } else {
             getString(R.string.notification_text, cityName)
@@ -404,10 +424,30 @@ class ForeGroundService: Service() {
         notificationManager.notify(NOTIFICATION_ID, builder.build())
     }
 
+    fun updatePauseUI() {
+        if (!::remoteViews.isInitialized || !::builder.isInitialized) return
+
+        val isPaused = _isPaused.value
+        val action = if (isPaused) Actions.RESUME else Actions.PAUSE
+        val buttonText = if (isPaused) "Resume" else "Pause $pauseDurationText"
+
+        val intent = Intent(this, ForeGroundService::class.java).apply {
+            this.action = action.toString()
+        }
+        val pendingIntent = PendingIntent.getService(this, 2, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
+        remoteViews.setTextViewText(R.id.btn_ntf_pause, buttonText)
+        remoteViews.setOnClickPendingIntent(R.id.btn_ntf_pause, pendingIntent)
+
+        notificationManager.notify(NOTIFICATION_ID, builder.build())
+    }
+
     fun updateStatusUI() {
         if (!::remoteViews.isInitialized || !::builder.isInitialized) return
 
-        val drawable = when (status) {
+        val drawable = if (_isPaused.value) {
+            R.drawable.notification_indicator_orange
+        } else when (status) {
             Status.ACTIVE -> R.drawable.notification_indicator_green
             Status.SEARCHING -> R.drawable.notification_indicator_orange
             Status.ERROR -> R.drawable.notification_indicator_red
@@ -460,6 +500,56 @@ class ForeGroundService: Service() {
         } else {
             startService(intent)
         }
+    }
+
+    private fun pauseTracking(durationMillis: Long) {
+        _isPaused.value = true
+        pauseJob?.cancel()
+        
+        // Use AlarmManager for persistent resume even if app is killed
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(this, PauseResumeReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            this, 1001, intent, 
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        val triggerTime = System.currentTimeMillis() + durationMillis
+        
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            if (alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+            } else {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+            }
+        } else {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+        }
+
+        pauseJob = serviceScope.launch {
+            updateNotificationUI()
+            updateStatusUI()
+            updatePauseUI()
+        }
+    }
+
+    private fun resumeTracking() {
+        _isPaused.value = false
+        pauseJob?.cancel()
+        pauseJob = null
+        
+        // Cancel scheduled alarm
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(this, PauseResumeReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            this, 1001, intent, 
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.cancel(pendingIntent)
+
+        updateNotificationUI()
+        updateStatusUI()
+        updatePauseUI()
     }
 
     private val providerReceiver = object : BroadcastReceiver() {

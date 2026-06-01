@@ -7,61 +7,89 @@
 
     <TextView
         android:id="@+id/txt_ntf_title"
+        android:layout_width="258dp"
+        android:layout_height="30dp"
+        android:layout_alignParentStart="true"
+        android:layout_alignParentTop="true"
+        android:layout_marginStart="13dp"
+        android:layout_marginTop="17dp"
+        android:fontFamily="@font/source_sans_pro_bold"
         android:text="@string/notification_title"
         android:textColor="?android:attr/textColorPrimary"
         android:textSize="17sp"
-        android:fontFamily="@font/source_sans_pro_bold"
-        android:textStyle="bold"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_toStartOf="@id/btn_ntf_sync"
-        android:layout_marginEnd="8dp"/>
+        android:textStyle="bold" />
 
     <TextView
         android:id="@+id/txt_ntf_text"
-        android:text="@string/notification_text"
-        android:textColor="?android:attr/textColorPrimary"
-        android:fontFamily="@font/source_sans_pro_regular"
-        android:layout_below="@id/txt_ntf_title"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_toStartOf="@id/btn_ntf_sync"
-        android:layout_marginEnd="8dp"/>
+        android:layout_below="@id/txt_ntf_title"
+        android:layout_alignStart="@+id/txt_ntf_title"
+        android:layout_marginStart="0dp"
+        android:layout_marginTop="5dp"
+        android:fontFamily="@font/source_sans_pro_regular"
+        android:text="@string/notification_text"
+        android:textColor="?android:attr/textColorPrimary" />
+
+    <!-- Sync Button -->
 
     <TextView
         android:id="@+id/txt_ntf_stats"
-        android:text="0.00 km | 0 pts"
-        android:textColor="?android:attr/textColorSecondary"
-        android:textSize="12sp"
-        android:fontFamily="@font/source_sans_pro_light"
-        android:layout_below="@id/txt_ntf_text"
-        android:layout_marginTop="2dp"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_toStartOf="@id/btn_ntf_sync"
-        android:layout_marginEnd="8dp"/>
+        android:layout_below="@id/txt_ntf_text"
+        android:layout_alignStart="@+id/txt_ntf_text"
+        android:layout_marginStart="0dp"
+        android:layout_marginTop="5dp"
+        android:fontFamily="@font/source_sans_pro_light"
+        android:text="0.00 km | 0 pts"
+        android:textColor="?android:attr/textColorSecondary"
+        android:textSize="12sp" />
 
-    <!-- Sync Button -->
+    <!-- Indicator -->
+
     <ImageView
         android:id="@+id/btn_ntf_sync"
         android:layout_width="32dp"
         android:layout_height="32dp"
-        android:layout_alignParentEnd="true"
-        android:layout_centerVertical="true"
-        android:layout_marginEnd="40dp"
-        android:padding="4dp"
+        android:layout_alignTop="@+id/txt_ntf_title"
+        android:layout_alignEnd="@+id/btn_ntf_pause"
+        android:layout_marginTop="0dp"
+        android:layout_marginEnd="0dp"
         android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Sync Data"
+        android:padding="4dp"
         android:src="@drawable/ic_sync"
-        android:visibility="visible"
-        android:contentDescription="Sync Data"/>
+        android:visibility="visible" />
 
-    <!-- Indicator -->
+    <TextView
+        android:id="@+id/btn_ntf_pause"
+        android:layout_width="93dp"
+        android:layout_height="34dp"
+        android:layout_below="@id/notification_statusDot"
+        android:layout_alignBottom="@+id/txt_ntf_stats"
+        android:layout_alignParentEnd="true"
+        android:layout_marginTop="47dp"
+        android:layout_marginEnd="13dp"
+        android:layout_marginBottom="0dp"
+        android:background="@drawable/notification_indicator_orange"
+        android:clickable="true"
+        android:focusable="true"
+        android:paddingHorizontal="6dp"
+        android:paddingVertical="2dp"
+        android:text="Pause 1h"
+        android:textAlignment="center"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp" />
+
     <ImageView
         android:id="@+id/notification_statusDot"
         android:layout_width="13dp"
         android:layout_height="13dp"
-        android:layout_alignParentEnd="true"
         android:layout_alignParentTop="true"
+        android:layout_alignParentEnd="true"
+        android:layout_marginTop="1dp"
+        android:layout_marginEnd="13dp"
         android:contentDescription="@string/str_ntf_about_statusDot"
-        android:src="@drawable/notification_indicator_orange"/>
+        android:src="@drawable/notification_indicator_orange" />
 </RelativeLayout>

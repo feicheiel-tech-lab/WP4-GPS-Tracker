@@ -419,6 +419,7 @@ fun OSMMapScreen(
     val location by ForeGroundService.currentLocation.collectAsState()
     val status by ForeGroundService.currentStatus.collectAsState()
     val isServiceRunning by ForeGroundService.isRunning.collectAsState()
+    val isPaused by ForeGroundService.isPaused.collectAsState()
     val syncedCount by database.locationDao().getSyncedCountFlow(userId).collectAsState(initial = 0)
     val unsyncedCount by database.locationDao().getUnsyncedCountFlow(userId).collectAsState(initial = 0)
 
@@ -454,6 +455,9 @@ fun OSMMapScreen(
     val sdf = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
     var isDurationMenuExpanded by remember { mutableStateOf(false) }
     var isFollowingUser by remember { mutableStateOf(true) }
+    
+    var selectedPauseDuration by remember { mutableStateOf("1 hour") }
+    var isPauseMenuExpanded by remember { mutableStateOf(false) }
 
     // Initial map centering
     LaunchedEffect(Unit) {
@@ -1035,6 +1039,68 @@ fun OSMMapScreen(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
+//                            Row(
+//                                modifier = Modifier.fillMaxWidth(),
+//                                horizontalArrangement = Arrangement.SpaceBetween,
+//                                verticalAlignment = Alignment.CenterVertically
+//                            ) {
+//                                Column(modifier = Modifier.weight(1f)) {
+//                                    Text(if (isPaused) "Tracking Paused" else "Pause Logging", style = MaterialTheme.typography.bodyMedium)
+//                                    if (!isPaused) {
+//                                        Box {
+//                                            Text(
+//                                                text = "Duration: $selectedPauseDuration",
+//                                                style = MaterialTheme.typography.labelSmall,
+//                                                color = Color(0xFFFFA726),//MaterialTheme.colorScheme.primary,
+//                                                modifier = Modifier
+//                                                    .pointerInput(Unit) {
+//                                                        detectTapGestures(onTap = { isPauseMenuExpanded = true })
+//                                                    }
+//                                                    .padding(vertical = 4.dp)
+//                                            )
+//                                            DropdownMenu(
+//                                                expanded = isPauseMenuExpanded,
+//                                                onDismissRequest = { isPauseMenuExpanded = false }
+//                                            ) {
+//                                                listOf("1 min", "30 min", "1 hour").forEach { duration ->
+//                                                    DropdownMenuItem(
+//                                                        text = { Text(duration) },
+//                                                        onClick = {
+//                                                            selectedPauseDuration = duration
+//                                                            isPauseMenuExpanded = false
+//                                                        }
+//                                                    )
+//                                                }
+//                                            }
+//                                        }
+//                                    }
+//                                }
+//                                Button(
+//                                    onClick = {
+//                                        val durationMs = when (selectedPauseDuration) {
+//                                            "1 min" -> 60000L
+//                                            "30 min" -> 1800000L
+//                                            else -> 3600000L
+//                                        }
+//                                        val intent = Intent(context, ForeGroundService::class.java).apply {
+//                                            action = if (isPaused) ForeGroundService.Actions.RESUME.toString() else ForeGroundService.Actions.PAUSE.toString()
+//                                            if (!isPaused) {
+//                                                putExtra("duration_ms", durationMs)
+//                                                putExtra("duration_text", selectedPauseDuration)
+//                                            }
+//                                        }
+//                                        context.startService(intent)
+//                                    },
+//                                    shape = RoundedCornerShape(12.dp),
+//                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+//                                        containerColor = if (isPaused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.errorContainer,
+//                                        contentColor = if (isPaused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onErrorContainer
+//                                    )
+//                                ) {
+//                                    Text(if (isPaused) "Resume Now" else "Pause for $selectedPauseDuration")
+//                                }
+//                            }
+
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1141,6 +1207,73 @@ fun OSMMapScreen(
                                     )
                                     Spacer(Modifier.width(8.dp))
                                     Text("Syncing...", style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(if (isPaused) "Tracking Paused" else "Pause Logging", style = MaterialTheme.typography.bodyMedium)
+                                    if (!isPaused) {
+                                        Box {
+                                            Text(
+                                                text = "Duration: $selectedPauseDuration",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color(0xFFFFA726),//MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier
+                                                    .pointerInput(Unit) {
+                                                        detectTapGestures(onTap = { isPauseMenuExpanded = true })
+                                                    }
+                                                    .padding(vertical = 4.dp)
+                                            )
+                                            DropdownMenu(
+                                                expanded = isPauseMenuExpanded,
+                                                onDismissRequest = { isPauseMenuExpanded = false }
+                                            ) {
+                                                listOf("1 min", "30 min", "1 hour").forEach { duration ->
+                                                    DropdownMenuItem(
+                                                        text = { Text(duration) },
+                                                        onClick = {
+                                                            selectedPauseDuration = duration
+                                                            isPauseMenuExpanded = false
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Button(
+                                    onClick = {
+                                        val durationMs = when (selectedPauseDuration) {
+                                            "1 min" -> 60000L
+                                            "30 min" -> 1800000L
+                                            else -> 3600000L
+                                        }
+                                        val intent = Intent(context, ForeGroundService::class.java).apply {
+                                            action = if (isPaused) ForeGroundService.Actions.RESUME.toString() else ForeGroundService.Actions.PAUSE.toString()
+                                            if (!isPaused) {
+                                                putExtra("duration_ms", durationMs)
+                                                putExtra("duration_text", selectedPauseDuration)
+                                            }
+                                        }
+                                        context.startService(intent)
+                                    },
+                                    shape = RoundedCornerShape(17.dp),
+                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                        containerColor = if (isPaused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.errorContainer,
+                                        contentColor = if (isPaused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                ) {
+                                    Text(if (isPaused) "Resume Now" else "Pause for $selectedPauseDuration",
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontWeight = FontWeight.Medium,
+                                            fontFamily = feicheiel.technologies.trackme.ui.theme.SourceSansProFontFamily
+                                        )
+                                    )
                                 }
                             }
 
