@@ -293,9 +293,9 @@ class ForeGroundService: Service() {
     @SuppressLint("MissingPermission")
     private fun startLocationUpdates(){
         acquireWakeLock()
-        // Faster interval (1s) to help get GPS fix when offline
-        val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000)
-            .setMinUpdateIntervalMillis(1000).build()
+        // Reduced sampling resolution (5s) to save battery while maintaining track quality.
+        val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000)
+            .setMinUpdateIntervalMillis(5000).build()
         fusedLocationProviderClient.requestLocationUpdates(
             locationRequest,
             locationCallback,
