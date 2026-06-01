@@ -205,7 +205,8 @@ class SyncForegroundService : Service() {
                         device    = deviceId,
                         latitude  = it.latitude,
                         longitude = it.longitude,
-                        timestamp = isoSdf.format(Date(it.timestamp))
+                        timestamp = isoSdf.format(Date(it.timestamp)),
+                        accuracy  = it.accuracy
                     )
                 }
 
@@ -327,7 +328,7 @@ class SyncForegroundService : Service() {
                             longitude          = pt.longitude,
                             timestamp          = ts,
                             speed              = null,
-                            accuracy           = 0f,
+                            accuracy           = pt.accuracy ?: 0f,
                             distanceFromPrevious = distFromPrev,
                             totalDistance      = runningDistance,
                             isSynced           = true   // came from server — already synced

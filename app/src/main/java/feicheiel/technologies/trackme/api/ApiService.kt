@@ -30,7 +30,8 @@ data class GeoPointRequest(
     val device: String,
     val latitude: Double,
     val longitude: Double,
-    val timestamp: String   // ISO-8601 UTC: "2026-04-07T12:00:00Z"
+    val timestamp: String,  // ISO-8601 UTC: "2026-04-07T12:00:00Z"
+    val accuracy: Float? = null
 )
 
 data class DownloadRequest(
