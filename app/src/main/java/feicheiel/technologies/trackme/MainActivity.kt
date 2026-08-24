@@ -1,6 +1,7 @@
 package feicheiel.technologies.trackme
 
 import android.Manifest
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -260,9 +261,30 @@ class MainActivity : ComponentActivity() {
                     this, Manifest.permission.ACCESS_BACKGROUND_LOCATION
                 ) != PackageManager.PERMISSION_GRANTED
             ) {
-                backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                showBackgroundLocationDisclosure()
             }
         }
+    }
+
+    // Google Play requires a prominent in-app disclosure of what background location is used
+    // for, shown before the system permission dialog (not just the OS dialog itself).
+    private fun showBackgroundLocationDisclosure() {
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.background_location_disclosure_title))
+            .setMessage(getString(R.string.background_location_disclosure_message))
+            .setCancelable(false)
+            .setPositiveButton(getString(R.string.background_location_disclosure_continue)) { _, _ ->
+                backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            }
+            .setNegativeButton(getString(R.string.background_location_disclosure_not_now)) { dialog, _ ->
+                dialog.dismiss()
+                Toast.makeText(
+                    this,
+                    "Background location denied — tracking may stop when the screen turns off",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            .show()
     }
 
     // Step 2: Standalone background-location request — must be separate on Android 11+.

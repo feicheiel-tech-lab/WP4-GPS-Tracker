@@ -4,4 +4,9 @@
     <string name="location">Sunyani</string>
     <string name="notification_text">Location: %1$s</string>
     <string name="str_ntf_about_statusDot">Indicates status of GPS provider client</string>
+
+    <string name="background_location_disclosure_title">Background location access</string>
+    <string name="background_location_disclosure_message">WP4 - GPSTracker collects location data to track your movement for the MovingIMPACT WP4 research study, including when the app is closed or not in use. This location data is uploaded to our research server and used only for the purposes of this study. You can turn this off at any time in Android Settings.</string>
+    <string name="background_location_disclosure_continue">Continue</string>
+    <string name="background_location_disclosure_not_now">Not now</string>
 </resources>
