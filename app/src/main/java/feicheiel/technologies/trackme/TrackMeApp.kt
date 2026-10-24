@@ -20,8 +20,14 @@ class TrackMeApp : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        // Logging full request/response bodies (GPS coordinates, bearer tokens) is a
+        // perf + privacy cost that has no business shipping in release builds.
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.BODY
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
         }
 
         val client = OkHttpClient.Builder()

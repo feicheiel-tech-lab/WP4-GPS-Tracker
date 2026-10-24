@@ -3,7 +3,10 @@ package feicheiel.technologies.trackme
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
+import androidx.work.WorkManager
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -15,15 +18,17 @@ class BootReceiver : BroadcastReceiver() {
             val isLoggedIn = sharedPref.getString("user_id", null) != null
 
             if (isLoggedIn) {
-                // Restart the tracking service.
-                val serviceIntent = Intent(context, ForeGroundService::class.java).apply {
-                    action = ForeGroundService.Actions.START.toString()
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(serviceIntent)
-                } else {
-                    context.startService(serviceIntent)
-                }
+                // Restart the tracking service. On Android 15+ a `location`-type foreground
+                // service can't be started directly from a BOOT_COMPLETED receiver, so hand
+                // it off to WorkManager's expedited work, which runs outside that restriction.
+                val startRequest = OneTimeWorkRequestBuilder<BootStartTrackingWorker>()
+                    .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                    .build()
+                WorkManager.getInstance(context).enqueueUniqueWork(
+                    "boot_start_tracking",
+                    ExistingWorkPolicy.REPLACE,
+                    startRequest
+                )
 
                 // Restore the midnight sync alarm — AlarmManager alarms are lost on reboot.
                 MidnightSyncReceiver.scheduleMidnightSync(context)

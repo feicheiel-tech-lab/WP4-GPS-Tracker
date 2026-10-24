@@ -22,7 +22,7 @@ android {
 
     defaultConfig {
         applicationId = "feicheiel.technologies.trackme"
-        minSdk = 31
+        minSdk = 24
         targetSdk = 36
         versionCode = 3
         versionName = "1.2"
@@ -43,7 +43,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -60,6 +61,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

@@ -299,11 +299,12 @@ class SyncForegroundService : Service() {
             val existingTimestamps = dao.getAllTimestamps(deviceId).toHashSet()
 
             // Calculate the last known total distance so cumulative distances stay correct.
-            var runningDistance = dao.getLastPoint(deviceId)?.totalDistance ?: 0f
+            val lastLocalPoint = dao.getLastPoint(deviceId)
+            var runningDistance = lastLocalPoint?.totalDistance ?: 0f
 
             val toInsert = mutableListOf<LocationEntity>()
-            var prevLat  = dao.getLastPoint(deviceId)?.latitude
-            var prevLon  = dao.getLastPoint(deviceId)?.longitude
+            var prevLat  = lastLocalPoint?.latitude
+            var prevLon  = lastLocalPoint?.longitude
 
             remotePoints
                 .filter { parseIsoTimestamp(it.timestamp) !in existingTimestamps }

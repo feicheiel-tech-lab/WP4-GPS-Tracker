@@ -20,6 +20,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -910,10 +911,11 @@ fun OSMMapScreen(
             IconButton(
                 onClick = { scope.launch { drawerState.open() } },
                 modifier = Modifier
-                    .padding(top = 48.dp, start = 16.dp)
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(top = 8.dp, start = 16.dp)
                     .size(48.dp)
                     .background(Color.White.copy(alpha = 0.9f), CircleShape)
-                    .align(Alignment.TopStart)
             ) {
                 Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.Black)
             }
@@ -923,7 +925,8 @@ fun OSMMapScreen(
             Surface(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 48.dp, end = 20.dp)
+                    .statusBarsPadding()
+                    .padding(top = 8.dp, end = 20.dp)
                     .shadow(
                         elevation = 48.dp,
                         shape = RoundedCornerShape(24.dp),
@@ -1394,8 +1397,9 @@ fun OSMMapScreen(
     }
 }
 
-suspend fun importCsvFromUri(context: Context, uri: Uri, currentUserId: String): Int {
-    return try {
+suspend fun importCsvFromUri(context: Context, uri: Uri, currentUserId: String): Int =
+    withContext(Dispatchers.IO) {
+    try {
         val database = AppDatabase.getDatabase(context)
         val existingPoints = database.locationDao().getAllPoints(currentUserId).toMutableList()
         val existingTimestamps = existingPoints.map { it.timestamp }.toSet()
@@ -1473,10 +1477,11 @@ suspend fun importCsvFromUri(context: Context, uri: Uri, currentUserId: String):
         e.printStackTrace()
         -1
     }
-}
+    }
 
-suspend fun writeCsvToUri(context: Context, uri: Uri, points: List<LocationEntity>): Boolean {
-    return try {
+suspend fun writeCsvToUri(context: Context, uri: Uri, points: List<LocationEntity>): Boolean =
+    withContext(Dispatchers.IO) {
+    try {
         context.contentResolver.openOutputStream(uri)?.use { outputStream ->
             val csvHeader = "ID,UserID,Latitude,Longitude,Timestamp,Speed,Accuracy,DistancePrev,TotalDistance,IsSynced\n"
             val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
@@ -1492,7 +1497,7 @@ suspend fun writeCsvToUri(context: Context, uri: Uri, points: List<LocationEntit
         e.printStackTrace()
         false
     }
-}
+    }
 
 @Composable
 fun LocationGlowIndicator(status: ForeGroundService.Status) {

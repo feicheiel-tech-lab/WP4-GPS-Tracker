@@ -222,8 +222,8 @@ class ForeGroundService: Service() {
                             database.locationDao().insert(entity)
 
                             // Update statistics in notification.
-                            val allPoints = database.locationDao().getAllPoints(currentUserId!!)
-                            updateStatsUI(newTotalDistance, allPoints.size)
+                            val pointsCount = database.locationDao().getPointCount(currentUserId!!)
+                            updateStatsUI(newTotalDistance, pointsCount)
                         }
                     }
                 }
@@ -392,13 +392,17 @@ class ForeGroundService: Service() {
         updateStatusUI() // Ensure initial status (Searching/Orange) is applied
         updatePauseUI()
         updateNotificationUI()
-        startForeground(NOTIFICATION_ID, builder.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, builder.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        } else {
+            startForeground(NOTIFICATION_ID, builder.build())
+        }
 
         // Populate stats from existing DB before the first GPS fix arrives
         serviceScope.launch {
             val userId = currentUserId ?: return@launch
             val lastPoint = database.locationDao().getLastPoint(userId)
-            val pointsCount = database.locationDao().getAllPoints(userId).size
+            val pointsCount = database.locationDao().getPointCount(userId)
             if (lastPoint != null || pointsCount > 0) {
                 updateStatsUI(lastPoint?.totalDistance ?: 0f, pointsCount)
             }
@@ -468,7 +472,7 @@ class ForeGroundService: Service() {
         // Check for unsynced points to show sync button
         serviceScope.launch {
             val unsyncedCount = if (currentUserId != null) {
-                database.locationDao().getUnsyncedPoints(currentUserId!!).size
+                database.locationDao().getUnsyncedCount(currentUserId!!)
             } else 0
 
             if (unsyncedCount > 0) {
